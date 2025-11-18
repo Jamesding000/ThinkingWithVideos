@@ -16,12 +16,12 @@ conda activate verl
 # We'll use official PyTorch wheels via pip (CUDA 12.4).
 
 # === 2. Core PyTorch + CUDA stack (GPU) ===
-# Uses the official cu124 wheels (compatible with your driver).
+# Uses the official cu129 wheels (babel)
 pip install \
-  torch==2.6.0 \
-  torchvision==0.21.0 \
-  torchaudio==2.6.0 \
-  --index-url https://download.pytorch.org/whl/cu124
+  torch==2.8.0 \
+  torchvision==0.23.0 \
+  torchaudio==2.8.0 \
+  --index-url https://download.pytorch.org/whl/cu129
 
 # Tensordict version used by the original script
 pip install tensordict==0.6.2
@@ -71,9 +71,16 @@ pip install \
   "grpcio>=1.62.1"
 
 # === 5. FlashAttention + OpenCV ===
-# This should pick up a prebuilt wheel for cu124; if it tries to build,
-# you’ll need NVCC & build tools available.
-pip install "flash-attn==2.7.4.post1" --no-build-isolation --no-cache-dir
+# Super slow build using pip install or clone repo + python setup.py install
+# Fastest way to build is https://github.com/Dao-AILab/flash-attention/issues/945#issuecomment-2948520692
+# Find the wheel file at: https://github.com/Dao-AILab/flash-attention/releases
+# python version: 3.10
+# torch version: 2.8.0
+# cuda version: 12.9 (babel)
+# cxx11abi: TRUE
+# https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl
+# MAX_JOBS=1 pip install "flash-attn==2.7.4.post1" --no-build-isolation --no-cache-dir
+pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl
 pip install opencv-python opencv-fixer
 
 # === 6. Extra basics: plotting / notebooks / analysis ===
