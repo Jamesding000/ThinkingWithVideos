@@ -1,17 +1,9 @@
 .vscode/
 .DS_Store
 
-/_pycache_
-/outputs/
-/models/
-/data/
-/logs/
-/checkpoints/
-/wandb/
-/tmp/
-/__pycache__/
-/venv/
-/env/
-/env.bak/
-/env.bak.bak/
-/env.bak.bak.bak/
+__pycache__/
+verl/verl.egg-info/
+
+data/
+outputs/
+models/
