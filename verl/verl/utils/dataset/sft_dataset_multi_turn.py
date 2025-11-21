@@ -17,6 +17,7 @@
 import copy
 import json
 import math
+import glob
 import logging
 import os
 import re
@@ -31,6 +32,7 @@ import torch
 from omegaconf import DictConfig, ListConfig
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, ProcessorMixin
+from transformers.video_utils import VideoMetadata
 
 import verl
 import verl.utils.torch_functional as verl_F
@@ -45,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 import eval_prompts 
 
+DEFAULT_FPS = 2.0
 CHAT_TEMPLATE_NO_SYS = "{% set image_count = namespace(value=0) %}{% set video_count = namespace(value=0) %}{% for message in messages %}<|im_start|>{{ message['role'] }}\n{% if message['content'] is string %}{{ message['content'] }}<|im_end|>\n{% else %}{% for content in message['content'] %}{% if content['type'] == 'image' or 'image' in content or 'image_url' in content %}{% set image_count.value = image_count.value + 1 %}{% if add_vision_id %}Picture {{ image_count.value }}: {% endif %}<|vision_start|><|image_pad|><|vision_end|>{% elif content['type'] == 'video' or 'video' in content %}{% set video_count.value = video_count.value + 1 %}{% if add_vision_id %}Video {{ video_count.value }}: {% endif %}<|vision_start|><|video_pad|><|vision_end|>{% elif 'text' in content %}{{ content['text'] }}{% endif %}{% endfor %}<|im_end|>\n{% endif %}{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}"
 
 def collate_fn(data_list: list[dict]) -> dict:
@@ -245,7 +248,7 @@ For each function call, return a json object with function name and arguments wi
             assert len(example['solution']) == 2, "Only support 2 round conversation now."
             assert 'video' in example
             assert 'tool_params' in example
-            assert 'answer' in example
+            # assert 'answer' in example  # this is not needed in SFT
             tool_st, tool_ed = eval(example['tool_params'])
             messages.append({
                 "role": "assistant",
@@ -261,6 +264,7 @@ For each function call, return a json object with function name and arguments wi
                 "video_start": tool_st,
                 "video_end": tool_ed,
             }
+            # print(video_content)
             if isinstance(self.video_kwargs, dict):
                 video_content.update(self.video_kwargs)
             if 'video_kwargs' in example and isinstance(example['video_kwargs'], dict):
@@ -279,7 +283,7 @@ For each function call, return a json object with function name and arguments wi
                 "content": example['solution'][1],
             })
         data.update({
-            "data_source": example['data_source'],
+            "data_source": example['data_source'] if 'data_source' in example else 'N/A',
             "prompt": messages,
             "ability": "temporal grounding",
             # "reward_model": {"style": "rule", "ground_truth": eval(example['answer'])},
@@ -315,12 +319,14 @@ For each function call, return a json object with function name and arguments wi
 
         dataframe_images = []
         dataframe_videos = []
+        # Filter out overly long prompts (so that the rollout during RL might exceed context length), and invalid ground truth
         if self.filter_overlong_prompts:
             def filter_fn(doc):
                 prompt_text = self.tokenizer.apply_chat_template(doc["prompt"], add_generation_prompt=True, tokenize=False)
                 prompt_tokens = self.tokenizer.tokenize(prompt_text)
 
                 all_token_length = len(prompt_tokens)
+                # TODO: check what does 4096 and 2048 mean
                 if all_token_length + 4096 + 2048 > self.max_prompt_length:
                     print(f'filter item out, {all_token_length=} + 4096 + 2048 > {self.max_prompt_length=}, item id = {doc["extra_info"]["index"]}')
                     return False
@@ -379,6 +385,40 @@ For each function call, return a json object with function name and arguments wi
                 item = random.randint(0, len(self.dataframe) - 1)
         return res
 
+    def _resolve_video_path(self, video_path: str) -> str:
+        """
+        Resolve the actual video path on disk when the true extension is unknown.
+        Given something like '/path/abc123.mp4', this function:
+        1. Extracts video_id = 'abc123'
+        2. Searches the directory for files matching 'abc123*'
+        3. If found, returns the first match
+        4. Otherwise returns default '<dir>/abc123.mp4'
+
+        This ensures we correctly pick up files like:
+            abc123.f243.mp4
+            abc123.f251.webm
+            abc123.mkv
+            abc123.mp4
+        """
+        video_dir = os.path.dirname(video_path)
+        filename = os.path.basename(video_path)
+
+        # Extract ID (before first dot)
+        video_id = filename.split('.')[0]
+
+        # Look for any file starting with that ID, with any extension
+        pattern = os.path.join(video_dir, f"{video_id}*")
+        matches = glob.glob(pattern)
+
+        if matches:
+            # Return the most relevant: shortest filename wins (abc123.mp4 over abc123.f243.mp4)
+            matches.sort(key=lambda x: len(os.path.basename(x)))
+            print(f'-- successfully resolved --')
+            return matches[0]
+
+        # fallback: use the original video path
+        return video_path
+
     def getitem(self, item):
         """
         Note that we also return the raw_input_ids so that it can be combined with other chat template
@@ -409,26 +449,53 @@ For each function call, return a json object with function name and arguments wi
                 images = [process_image(image) for image in msg_images_list]
             videos = None
             fps_list = None
+            fake_metadata_list = []
+            # Example: msg_videos_list = [{'type': 'video', 'video': '/data/user_data/jamesdin/data/charades/E1VFZ.mp4', 'min_pixels': 3136, 'max_pixels': 50176, 'max_frames': 128, 'draw_number': True, 'parallel': True}]
             if len(msg_videos_list) > 0:
                 videos = []
                 fps_list = []
                 for video in msg_videos_list:
                     # try to load from frame
+                    # TODO: enable this line when not using pre-extracted frames
+                    # video_frame_path = video_path.split('.')[0]
                     video_path = video['video']
-                    video_frame_path = video_path.split('.')[0]
-                    fps = 2.0
+                    video_frame_path = self._resolve_video_path(video_path)
                     if os.path.exists(video_frame_path):
+                        # load from pre-extracted frames
                         frame_paths = os.listdir(video_frame_path)
                         frame_paths = sorted(frame_paths, key=lambda x: int(x.split("_")[-1].split(".")[0]))
                         frame_paths = [os.path.join(video_frame_path, frame_path) for frame_path in frame_paths]
                         video_path = frame_paths
                         video['video'] = video_path
-                        video['fps'] = fps
+                        video['fps'] = DEFAULT_FPS  # tell the processor to assume that the video has this fps (because we pre-sampled it this way)
                     # new_video, fps = cached_process_video(video)
                     new_video, fps = process_video(video)
                     videos.append(new_video)
                     fps_list.append(fps)
-            model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, fps=fps_list, return_tensors="pt")
+                    
+                    n_frames = len(new_video)
+                    fake_metadata = VideoMetadata(
+                            total_num_frames=n_frames,
+                            fps=DEFAULT_FPS,
+                            duration=n_frames / DEFAULT_FPS,
+                            frames_indices=np.arange(n_frames),
+                        )
+                    fake_metadata_list.append(fake_metadata)
+            # 1. tokenize the text; 2. normalize shape of visual inputs; 3. packs everything into a dict of tensors
+            # TODO: pass in a list to fps parameter will cause error, we pass in fps=2.0 instead
+            # This is caused by the implementation difference of Qwen2.5 and Qwen3 Processor:
+            # Qwen2.5: https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/processing_qwen2_5_vl.py
+            # Qwen3: https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen3_vl/processing_qwen3_vl.py
+            # model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, fps=DEFAULT_FPS, return_tensors="pt")
+            # 2 Options: Process from raw video or from pre-extracted frames
+            if videos is not None and len(videos) > 0:
+                if isinstance(videos[0], torch.Tensor):  # Raw Video, require sampling at DEFAULT_FPS, much slower
+                    model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, fps=DEFAULT_FPS, return_tensors="pt")
+                else:  # Pre-extracted Frames, force not to sample
+                    model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, videos_kwargs={"video_metadata": fake_metadata_list, "return_metadata": True}, return_tensors="pt")
+            else:  # No Video
+                model_inputs = self.processor(text=[raw_prompt], images=images, return_tensors="pt")
+
             input_id_list.append(model_inputs["input_ids"])
             attn_mask = model_inputs["attention_mask"]
             attention_mask_list.append(attn_mask)
@@ -475,7 +542,7 @@ For each function call, return a json object with function name and arguments wi
             truncation=self.truncation,
         )
         if self.processor is not None and 'Qwen' in self.processor.image_processor.__class__.__name__:  # little trick, support qwen2.5-vl
-            from verl.models.transformers.qwen2_vl import get_rope_index
+            from verl.models.transformers.qwen3_vl import get_rope_index
             logger.debug(f'>>> in rl_dataset: start use get_rope_index, {video_grid_thw=}, {second_per_grid_ts=}')
             position_ids = [
                 get_rope_index(
