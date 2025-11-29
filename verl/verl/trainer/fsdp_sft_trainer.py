@@ -325,7 +325,8 @@ class FSDPSFTTrainer:
                 shift_logits = logits[..., :-1, :].contiguous()
                 shift_labels = labels.contiguous()
                 # Flatten the tokens
-                shift_logits = shift_logits.view(-1, self.model.config.vocab_size)
+                # Qwen3VLConfig' doesn't have 'vocab_size', but Qwen3VLConfig.text_config has 'vocab_size'
+                shift_logits = shift_logits.view(-1, self.model.config.text_config.vocab_size)
                 shift_labels = shift_labels.view(-1)
                 # Enable model parallelism
                 shift_labels = shift_labels.to(shift_logits.device)

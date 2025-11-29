@@ -37,9 +37,9 @@ EOF
 # === 3. vLLM + HF ecosystem + VERL deps ===
 # latest versions of vllm and transformers to support Qwen3
 pip install \
-  "vllm" \
-  "transformers" \
-  accelerate \
+  "vllm==0.11.0" \
+  "transformer==4.57.1" \
+  "accelerate==1.11.0" \
   datasets \
   "peft==0.17.1" \
   hf-transfer \
@@ -117,7 +117,3 @@ print("cuda device count:", torch.cuda.device_count())
 import flash_attn
 print("flash-attn imported OK")
 EOF
-
-echo
-echo "✅ Environment 'verl' is ready."
-echo "To use it next time:  source ~/miniconda3/etc/profile.d/conda.sh && conda activate verl"

@@ -31,6 +31,7 @@ import torch
 from omegaconf import DictConfig, ListConfig
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, ProcessorMixin
+from transformers.video_utils import VideoMetadata
 
 import verl.utils.torch_functional as verl_F
 from verl.utils.model import compute_position_id_with_mask
@@ -43,6 +44,8 @@ from verl.utils.dataset.vision_utils import process_image, process_video, cached
 logger = logging.getLogger(__name__)
 
 import eval_prompts 
+
+DEFAULT_FPS = 2.0
 
 def collate_fn(data_list: list[dict]) -> dict:
     """
@@ -230,7 +233,8 @@ For each function call, return a json object with function name and arguments wi
                 {"type": "text", "text": prompt}
             ]
         data.update({
-            "data_source": example['data_source'],
+            # "data_source": example['data_source'],
+            "data_source": './data/' + example['data_source'],
             "prompt": [ 
                 {
                     "role": "system",
@@ -341,6 +345,7 @@ For each function call, return a json object with function name and arguments wi
                 mm_processor_kwargs["fps"] = []
 
             videos = None
+            fake_metadata_list = []
             if self.video_key in row_dict:
                 videos = []
                 multi_modal_data["video"] = []
@@ -362,15 +367,45 @@ For each function call, return a json object with function name and arguments wi
                         #     fps = max_frames / max(total_frames, 1e-6) * fps
                         video_path = frame_paths
                         video['video'] = video_path
-                        video['fps'] = fps
+                        video['fps'] = DEFAULT_FPS
                     # new_video, fps = cached_process_video(video)
+                    # video.keys(): ['type', 'video', 'min_pixels', 'max_pixels', 'max_frames', 'draw_number', 'parallel', 'fps'])
+                    # process_videos, take 64 max frames, no frame sampling because fps = 2 already, resize to [min_pixels, max_pixels] 
                     new_video, fps = process_video(video)
                     videos.append(new_video)
-                    multi_modal_data["video"].append(new_video)
+                    # Don't append yet - wait until we have metadata
                     mm_processor_kwargs["fps"].append(fps)
+                    
+                    n_frames = len(new_video)
+                    fake_metadata = VideoMetadata(
+                            total_num_frames=n_frames,
+                            fps=DEFAULT_FPS,
+                            duration=n_frames / DEFAULT_FPS,
+                            frames_indices=np.arange(n_frames),
+                        )
+                    fake_metadata_list.append(fake_metadata)
+                    # print('fake_metadata', fake_metadata)
+                    
+                    # Convert VideoMetadata to dict, filter out None values to avoid VLLM hasher warnings
+                    metadata_dict = {k: v for k, v in dict(fake_metadata).items() if v is not None}
+                    metadata_dict["do_sample_frames"] = False  # Important: we already sampled frames
+                    
+                    # VLLM expects videos as tuples of (video_array, metadata_dict)
+                    multi_modal_data["video"].append((new_video, metadata_dict)) 
 
-            model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, fps=mm_processor_kwargs["fps"], return_tensors="pt")
+            if videos is not None and len(videos) > 0:
+                if isinstance(videos[0], torch.Tensor):  # Raw Video, require sampling at DEFAULT_FPS, much slower
+                    model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, fps=DEFAULT_FPS, return_tensors="pt")
+                else:  # Pre-extracted Frames, force not to sample
+                    model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, videos_kwargs={"video_metadata": fake_metadata_list, "return_metadata": True}, return_tensors="pt")
+            else:  # No Video
+                model_inputs = self.processor(text=[raw_prompt], images=images, return_tensors="pt")
 
+            # print('model_inputs', model_inputs)
+            # print('pixel_values_videos', model_inputs['pixel_values_videos'].shape)
+            # print("input_ids", model_inputs['input_ids'].shape)
+            # print('attention_mask', model_inputs['attention_mask'].shape)
+            
             input_ids = model_inputs.pop("input_ids")
             attention_mask = model_inputs.pop("attention_mask")
 
@@ -392,6 +427,7 @@ For each function call, return a json object with function name and arguments wi
             input_ids = model_inputs.pop("input_ids")
             attention_mask = model_inputs.pop("attention_mask")
 
+        # [bs, prompt_length] - padding or truncation -> [bs, max_prompt_length]
         input_ids, attention_mask = verl_F.postprocess_data(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -402,7 +438,7 @@ For each function call, return a json object with function name and arguments wi
         )
 
         if self.processor is not None and 'Qwen' in self.processor.image_processor.__class__.__name__:  # little trick, support qwen2.5-vl
-            from verl.models.transformers.qwen2_vl import get_rope_index
+            from verl.models.transformers.qwen3_vl import get_rope_index
             logger.debug(f'>>> in rl_dataset: start use get_rope_index, video_grid_thw={model_inputs.get("video_grid_thw")}, second_per_grid_ts={model_inputs.get("second_per_grid_ts")}')
             position_ids = [
                 get_rope_index(

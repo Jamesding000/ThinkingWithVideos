@@ -7,3 +7,6 @@ verl/verl.egg-info/
 data/
 outputs/
 models/
+
+*.log
+secret.json
