@@ -3,7 +3,7 @@ set -euxo pipefail
 
 # === 0. Init conda ===
 # Adjust this path if your miniconda is elsewhere.
-source "$HOME/miniconda3/etc/profile.d/conda.sh"
+source "$HOME/miniconda/etc/profile.d/conda.sh"
 
 # === 1. Create a fresh env ===
 # If you want to recreate, uncomment the remove line.
