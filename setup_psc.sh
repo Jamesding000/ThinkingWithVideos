@@ -3,7 +3,13 @@ set -euxo pipefail
 
 # === 0. Init conda ===
 # Adjust this path if your miniconda is elsewhere.
+# singularity shell /ocean/containers/ngc/pytorch/latest.sif
+export REPO_FOLDER="rl"
+export HOME="/ocean/projects/cis220039p/wauyeong"
 source "$HOME/miniconda3/etc/profile.d/conda.sh"
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/m>
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+
 
 # === 1. Create a fresh env ===
 # If you want to recreate, uncomment the remove line.
@@ -98,7 +104,7 @@ python -m ipykernel install --user --name "verl" --display-name "Python (verl)"
 
 # === 7. Install VERL (your repo) ===
 # Adjust path if your repo lives somewhere else.
-cd "$HOME/James/ThinkingWithVideos/verl"
+cd "$HOME/$REPO_FOLDER/ThinkingWithVideos/verl"
 
 # Install the package itself without pulling in conflicting deps
 pip install --no-cache-dir --no-deps -e .
