@@ -1,28 +1,6 @@
 #!/bin/bash
 set -x
 
-model="Qwen3-VL-2B-Thinking"
-
-# Download model
-DIRECTORY="models"
-
-if [ -d "$DIRECTORY" ]; then
-    echo "Directory '$DIRECTORY' exists."
-else
-    mkdir $DIRECTORY
-fi
-
-DIRECTORY="models/${model}"
-
-if [ -d "$DIRECTORY" ]; then
-    echo "'$model' exists."
-else
-    mkdir $DIRECTORY
-    cd $DIRECTORY
-    git clone https://huggingface.co/Qwen/Qwen3-VL-2B-Thinking
-    cd ../..
-fi
-
 # Download data for VSI-Bench
 DIRECTORY="data/vsibench"
 
@@ -54,7 +32,7 @@ fi
 
 # Model configuration
 export model="Qwen3-VL-2B-Thinking"
-export model_path="models/${model}"
+export model_path="Qwen/${model}"
 
 # GPU configuration
 export n_gpus_per_node=1
