@@ -133,7 +133,7 @@ class VideoQADataset(Dataset):
 
     def __getitem__(self, idx):
         while idx < len(self.data):
-            # try:
+            try:
                 sample = self.data[idx]
                 if not 'question' in sample:
                     sample['question'] = sample['text']
@@ -207,9 +207,9 @@ class VideoQADataset(Dataset):
                 # ranki_print(f'In dataset, sample id: {sample["id"]}, video len = {len(video_inputs[0])} shape = {video_inputs[0][0].size} fps = {video_kwargs}')
                 return sample
             
-            # except Exception as e:
-            #     print(f"[ERROR] idx={idx}, video={self.data[idx]['video_id']}, error: {e}")
-            #     idx += 1
+            except Exception as e:
+                print(f"[ERROR] idx={idx}, video={self.data[idx]['id']}, error: {e}")
+                idx += 1
         raise RuntimeError("All samples from current idx onward failed.")
 
 def execute_tools(tools, tool_call_arguments, tools_kwargs):
@@ -274,6 +274,7 @@ def run_inference(args):
         # limit_mm_per_prompt={'image': 0, 'video': 2},
         gpu_memory_utilization=0.7,
         enforce_eager=True,
+        max_model_len=32768
     )
     processor = AutoProcessor.from_pretrained(qwen_path, trust_remote_code=True, use_fast=True)
     ranki_print("Load model and processor success!")

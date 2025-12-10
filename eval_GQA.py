@@ -30,7 +30,7 @@ def get_dataset_info(dataset):
     dataset_list = [
         {'dataset_name': 'next_gqa', 'frame_dir': 'data/nextgqa/video_14400frames_fps2', 'data_file': 'data/nextgqa/test_set_grpo_src.json'},  # gqa task
         {'dataset_name': 'rextime', 'frame_dir': 'data/rextime/video_14400frames_fps2', 'data_file': 'data/rextime/test_set_grpo_exist_src.json'},  # gqa task
-        {'dataset_name': 'rextime_val', 'frame_dir': 'data/rextime/video_14400frames_fps2', 'data_file': 'data/rextime/val_set_grpo_exist_src.json'},  # gqa task
+        {'dataset_name': 'rextime_val', 'frame_dir': '/data/user_data/jamesdin/data/rextime/video_14400frames_fps2', 'data_file': 'processed_data/rextime/rextime_validation.json'},  # gqa task
     ]
     for d in dataset_list:
         if d['dataset_name'] == dataset:
