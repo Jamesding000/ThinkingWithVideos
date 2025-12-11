@@ -25,9 +25,14 @@ import logging
 import numpy as np
 
 
+"""
+Expected format for the ground truth json file:
+required feilds: "id", "answer", "question_type".
+"""
+
 def get_dataset_info(dataset):
     dataset_list = [
-        {'dataset_name': 'vsibench', 'frame_dir': 'data/vsibench/video_14400frames_fps2', 'data_file': 'data/vsibench/test_set_grpo.json'},  # vqa task
+        {'dataset_name': 'vsibench', 'frame_dir': '/data/user_data/jamesdin/data/vsibench/video_14400frames_fps2', 'data_file': '/data/user_data/jamesdin/data/vsibench/test_set_grpo.json'},  # vqa task
         {'dataset_name': 'mmvu', 'frame_dir': 'data/mmvu/video_14400frames_fps2', 'data_file': 'data/mmvu/valid_set_grpo.json'},  # vqa task
         {'dataset_name': 'videommmu', 'frame_dir': 'data/videommmu/video_14400frames_fps2', 'data_file': 'data/videommmu/test_set_grpo.json'},  # vqa task
         {'dataset_name': 'longvideo-reason', 'frame_dir': 'data/longvideo-reason/video_14400frames_fps2', 'data_file': 'data/longvideo-reason/test_set_grpo_src_exist.json'},  # vqa task
@@ -61,6 +66,7 @@ def launch_multi_gpu_eval(args, dataset_name, frame_dir, data_file, evaluation_n
         processes = []
         for idx in range(0, num_chunks):
             cmd = [ "python3", args.inference_file,
+                "--backend", "vllm",
                 "--model-path", model_path,
                 "--video_dir", frame_dir,
                 "--gt_file", data_file,
@@ -178,10 +184,15 @@ def calc_eval_result(output_path, gt_file, num_chunks, data_path):
     # Preparing dictionary of question-answer sets
     prediction_set = {}
     parse_fail_cnt = 0
+    invalid_format_cnt = 0
     max_zoom_round = 0
     for sample in pred_contents:
         try:
-            ans = extract_answer(sample['pred'])
+            pred_text = sample['pred']
+            ans = extract_answer(pred_text)
+            # Check if answer tags were missing (extract_answer returns full text if no tags found)
+            if '<answer>' not in pred_text or '</answer>' not in pred_text:
+                invalid_format_cnt += 1
             acc = 0.0
             if 'question_type' in sample and sample['question_type'] in NA_QUESTION_TYPES:
                 ans_float = extract_float(ans)
@@ -259,6 +270,7 @@ def calc_eval_result(output_path, gt_file, num_chunks, data_path):
     output = "Result:\n"
     output += f"total samples = {cnt}\n"
     output += f"parse fail = {parse_fail_cnt}\n"
+    output += f"invalid format (no <answer> tags) = {invalid_format_cnt}\n"
     key_list = []
     value_list = []
     for key, meter in meter_dic.items():
@@ -288,7 +300,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--output_dir", type=str, default='~')
     parser.add_argument("--evaluation_name", type=str, default='evaluation')
-    parser.add_argument("--num_chunks", type=int, default=1)
+    parser.add_argument("--num_chunks", type=int, default=1)  # number of processes to eval in parallel
     parser.add_argument("--test", action="store_true")
     parser.add_argument("--max_frames", type=int, default=None)
     parser.add_argument("--fps", type=float, default=None)
