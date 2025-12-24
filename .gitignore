@@ -10,3 +10,8 @@ models/
 
 *.log
 secret.json
+
+# for downloading youtube videos
+cookies.txt
+
+!verl/verl/models

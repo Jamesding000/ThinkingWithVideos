@@ -11,6 +11,8 @@ import numpy as np
 from tqdm import tqdm
 from decord import VideoReader, cpu
 
+from download_and_extract_frames import extract_youtube_id
+
 from transformers.video_utils import VideoMetadata
 
 # from qwen_vl_utils import process_vision_info
@@ -50,7 +52,7 @@ First, think carefully about the video. Then, at the end, output ONLY the final 
 
 <answer>"""
 
-TEMPLATE = VQA_TEMPLATE
+TEMPLATE = os.getenv("MY_PROMPT_TEMPLATE", default="Please find the visual event described by a sentence in the video, determining its starting and ending times. The format should be: 'The event happens in the start time - end time'. For example, The event 'person turn a light on' happens in the 24.30 - 30.42 seconds. Now I will give you the textual sentence: {input_text}. Please return its start time and end time.")
 
 VIDEO_INFO_CACHE = {}
 
@@ -90,6 +92,8 @@ class VideoQADataset(Dataset):
                 gt_questions = [sample for sample in gt_questions if sample['id'] not in id_set]
         # TODO: remove this after debugging
         self.data = gt_questions
+        # Use prompt template from args if provided, otherwise use default
+        self.template = getattr(args, 'prompt_template', TEMPLATE) if hasattr(args, 'prompt_template') and args.prompt_template else TEMPLATE
         content_video = {
             "type": "video",
             "video": None,
@@ -119,143 +123,157 @@ class VideoQADataset(Dataset):
 
     def __getitem__(self, idx):
         while idx < len(self.data):
-            sample = self.data[idx]
-
-            # 1. Normalize question / answer fields
-            if "question" not in sample:
-                sample["question"] = sample["text"]
-            if "answer" not in sample:
-                sample["answer"] = str(sample["solution"])
-
-            # 2. Build multimodal spec from sample
-            if "video" in sample or "video_id" in sample:
-                video_name = sample["video_id"] if "video_id" in sample else sample["video"]
-                video_path, fps = None, 2.0
-
-                # Try pre-extracted frames first
-                video_frame_path = os.path.join(self.video_dir, video_name.split(".")[0])
-                if os.path.exists(video_frame_path):
-                    frame_paths = os.listdir(video_frame_path)
-                    frame_paths = sorted(
-                        frame_paths,
-                        key=lambda x: int(x.split("_")[-1].split(".")[0]),
-                    )
-                    frame_paths = [os.path.join(video_frame_path, fp) for fp in frame_paths]
-                    total_frames = len(frame_paths)
-
-                    if args.max_frames is not None and total_frames > args.max_frames:
-                        idxes = (
-                            torch.linspace(0, total_frames - 1, args.max_frames)
-                            .round()
-                            .long()
-                            .tolist()
-                        )
-                        if "videommmu" in self.video_dir:
-                            idxes.append(total_frames - 1)
-                        frame_paths = [frame_paths[i] for i in idxes]
-                    video_path = frame_paths
-
-                    # approximate fps from #frames and annotated duration
-                    fps = len(frame_paths) / float(sample["duration"])
-                else:
-                    # Fallback to raw video file if no frame dir exists
-                    for ext in [".mp4", ".webm", ".mkv", ".avi"]:
-                        path = os.path.join(self.video_dir, video_name.split(".")[0] + ext)
-                        if os.path.exists(path):
-                            video_path = path
-                            break
-
-                if video_path is None:
-                    raise FileNotFoundError(f"Video file for {video_name} not found.")
-
-                question = TEMPLATE.format(
-                    input_text=sample["question"], duration=sample["duration"]
-                )
-
-                # Spec that verl.process_video() understands
-                content_mm = self.content_video.copy()
-                content_mm["video"] = video_path
-                content_mm["fps"] = fps
-                content_mm["draw_number"] = True
-                content_mm["parallel"] = True
-
-            elif "image" in sample:
-                img_template = TEMPLATE.replace(
-                    "This is a video with duration {duration} seconds.", "This is an image."
-                )
-                question = img_template.format(input_text=sample["question"])
-                image_path = os.path.join(self.video_dir, sample["image"])
-
-                content_mm = self.content_image.copy()
-                content_mm["image"] = image_path
-
-            else:
-                raise ValueError(
-                    f"Not a multimodal sample! Neither 'video' nor 'image' key found in sample: {sample}"
-                )
-
-            # 3. Messages -> raw prompt
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        content_mm,
-                        {"type": "text", "text": question},
-                    ],
-                }
-            ]
-            text = self.processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-            print('input_text', text)
-
-            # 4. Build multi_modal_data & mm_processor_kwargs
-            multi_modal_data = {}
-            mm_processor_kwargs = {}
-
-            # Images (rare in this script, but keep for completeness)
-            if content_mm.get("type") == "image":
-                # vLLM will decode paths itself; no extra processing needed
-                multi_modal_data["image"] = [content_mm["image"]]
-                mm_processor_kwargs["fps"] = []
-
-            # Videos: pre-extracted frames + metadata (MATCH RL FORMAT)
-            if content_mm.get("type") == "video":
-                # Use verl's process_video so we load frames (no re-decoding .mp4)
-                video_spec = content_mm.copy()
-                frames, fps_eff = process_video(video_spec)  # list[PIL.Image], float
-
-                n_frames = len(frames)
-                if n_frames == 0:
-                    raise RuntimeError(f"No frames loaded for {video_name}")
-
-                # This metadata structure matches the working RL pipeline:
-                #   ([PIL frames...], {'total_num_frames': ..., 'fps': ..., 'duration': ..., 'frames_indices': ..., 'do_sample_frames': False})
-                metadata = {
-                    "total_num_frames": n_frames,
-                    "fps": float(fps_eff),
-                    "duration": float(n_frames) / float(fps_eff) if fps_eff > 0 else float(
-                        sample.get("duration", n_frames / 2.0)
-                    ),
-                    "frames_indices": np.arange(n_frames),
-                    "do_sample_frames": False,  # crucial: Qwen3 wrapper uses this
-                }
-
-                # NOTE: each video item is a TUPLE (frames, metadata_dict)
-                multi_modal_data["video"] = [(frames, metadata)]
-                mm_processor_kwargs["fps"] = [float(fps_eff)]
-
-            # 5. Pack llm_inputs for vLLM
-            llm_inputs = {
-                "prompt": text,
-                "multi_modal_data": multi_modal_data,
-                "mm_processor_kwargs": mm_processor_kwargs,
-            }
-            sample["llm_inputs"] = llm_inputs
-
-            return sample
-
+            try:
+                return self.getitem(idx)
+            except Exception as e:
+                video_id = self.data[idx]['video_id'] if 'video_id' in self.data[idx] else self.data[idx]['video']
+                print(f"[ERROR] idx={idx}, video={video_id}, error: {e}")
+                idx += 1
         raise RuntimeError("All samples from current idx onward failed.")
+
+    def getitem(self, idx):
+        sample = self.data[idx]
+
+        # 1. Normalize question / answer fields
+        if "question" not in sample:
+            sample["question"] = sample["text"]
+        if "answer" not in sample:
+            sample["answer"] = str(sample["solution"])
+
+        # 2. Build multimodal spec from sample
+        if "video" in sample or "video_id" in sample:
+            video_name = sample["video_id"] if "video_id" in sample else sample["video"]
+            video_path, fps = None, 2.0
+
+            # Try pre-extracted frames first
+            video_frame_path = os.path.join(self.video_dir, video_name.split(".")[0])
+            
+            if not os.path.exists(video_frame_path):
+                video_frame_path = os.path.join(self.video_dir, extract_youtube_id(video_name.split(".")[0]))
+                
+            if os.path.exists(video_frame_path):
+                frame_paths = os.listdir(video_frame_path)
+                frame_paths = sorted(
+                    frame_paths,
+                    key=lambda x: int(x.split("_")[-1].split(".")[0]),
+                )
+                frame_paths = [os.path.join(video_frame_path, fp) for fp in frame_paths]
+                total_frames = len(frame_paths)
+
+                if args.max_frames is not None and total_frames > args.max_frames:
+                    idxes = (
+                        torch.linspace(0, total_frames - 1, args.max_frames)
+                        .round()
+                        .long()
+                        .tolist()
+                    )
+                    if "videommmu" in self.video_dir:
+                        idxes.append(total_frames - 1)
+                    frame_paths = [frame_paths[i] for i in idxes]
+                video_path = frame_paths
+
+                # approximate fps from #frames and annotated duration
+                fps = len(frame_paths) / float(sample["duration"])
+            else:
+                # Fallback to raw video file if no frame dir exists
+                for ext in [".mp4", ".webm", ".mkv", ".avi"]:
+                    path = os.path.join(self.video_dir, video_name.split(".")[0] + ext)
+                    if os.path.exists(path):
+                        video_path = path
+                        break
+
+            if video_path is None:
+                raise FileNotFoundError(f"Video file for {video_name} not found.")
+
+            question = self.template.format(
+                input_text=sample["question"], duration=sample["duration"]
+            )
+
+            # Spec that verl.process_video() understands
+            content_mm = self.content_video.copy()
+            content_mm["video"] = video_path
+            content_mm["fps"] = fps
+            content_mm["draw_number"] = True
+            content_mm["parallel"] = True
+
+        elif "image" in sample:
+            img_template = self.template.replace(
+                "Video duration: {duration} seconds.", "This is an image."
+            ).replace(
+                "video and a question", "image and a question"
+            )
+            question = img_template.format(input_text=sample["question"], duration=0)
+            image_path = os.path.join(self.video_dir, sample["image"])
+
+            content_mm = self.content_image.copy()
+            content_mm["image"] = image_path
+
+        else:
+            raise ValueError(
+                f"Not a multimodal sample! Neither 'video' nor 'image' key found in sample: {sample}"
+            )
+
+        # 3. Messages -> raw prompt
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    content_mm,
+                    {"type": "text", "text": question},
+                ],
+            }
+        ]
+        text = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        # print('input_text', text)
+
+        # 4. Build multi_modal_data & mm_processor_kwargs
+        multi_modal_data = {}
+        mm_processor_kwargs = {}
+
+        # Images (rare in this script, but keep for completeness)
+        if content_mm.get("type") == "image":
+            # vLLM will decode paths itself; no extra processing needed
+            multi_modal_data["image"] = [content_mm["image"]]
+            mm_processor_kwargs["fps"] = []
+
+        # Videos: pre-extracted frames + metadata (MATCH RL FORMAT)
+        if content_mm.get("type") == "video":
+            # Use verl's process_video so we load frames (no re-decoding .mp4)
+            video_spec = content_mm.copy()
+            frames, fps_eff = process_video(video_spec)  # list[PIL.Image], float
+
+            n_frames = len(frames)
+            if n_frames == 0:
+                raise RuntimeError(f"No frames loaded for {video_name}")
+
+            # This metadata structure matches the working RL pipeline:
+            #   ([PIL frames...], {'total_num_frames': ..., 'fps': ..., 'duration': ..., 'frames_indices': ..., 'do_sample_frames': False})
+            metadata = {
+                "total_num_frames": n_frames,
+                "fps": float(fps_eff),
+                "duration": float(n_frames) / float(fps_eff) if fps_eff > 0 else float(
+                    sample.get("duration", n_frames / 2.0)
+                ),
+                "frames_indices": np.arange(n_frames),
+                "do_sample_frames": False,  # crucial: Qwen3 wrapper uses this
+            }
+
+            # NOTE: each video item is a TUPLE (frames, metadata_dict)
+            multi_modal_data["video"] = [(frames, metadata)]
+            mm_processor_kwargs["fps"] = [float(fps_eff)]
+
+        # 5. Pack llm_inputs for vLLM
+        llm_inputs = {
+            "prompt": text,
+            "multi_modal_data": multi_modal_data,
+            "mm_processor_kwargs": mm_processor_kwargs,
+        }
+        sample["llm_inputs"] = llm_inputs
+
+        return sample
+
 
 def set_seed(seed):
     random.seed(seed)
@@ -551,6 +569,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-cache", action="store_true", default=False)
     parser.add_argument("--backend", type=str, default="vllm", choices=["vllm", "transformers"])
     parser.add_argument("--repeat_times", type=int, default=1)
+    parser.add_argument("--prompt-template", type=str, default=None, help="Prompt template string. If not provided, uses default TEMPLATE.")
     
     global args
     args = parser.parse_args()

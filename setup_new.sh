@@ -86,7 +86,7 @@ pip install opencv-python opencv-fixer
 # === 6. Extra basics: plotting / notebooks / analysis ===
 pip install \
   decord \
-  rouge_score \
+  rouge-score \
   matplotlib \
   seaborn \
   scipy \
