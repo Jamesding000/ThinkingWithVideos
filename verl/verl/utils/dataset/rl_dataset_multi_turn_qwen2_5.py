@@ -17,7 +17,6 @@
 import copy
 import json
 import math
-import glob
 import logging
 import os
 import re
@@ -32,9 +31,7 @@ import torch
 from omegaconf import DictConfig, ListConfig
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, ProcessorMixin
-from transformers.video_utils import VideoMetadata
 
-import verl
 import verl.utils.torch_functional as verl_F
 from verl.utils.model import compute_position_id_with_mask
 
@@ -46,9 +43,6 @@ from verl.utils.dataset.vision_utils import process_image, process_video, cached
 logger = logging.getLogger(__name__)
 
 import eval_prompts 
-
-DEFAULT_FPS = 2.0
-CHAT_TEMPLATE_NO_SYS = "{% set image_count = namespace(value=0) %}{% set video_count = namespace(value=0) %}{% for message in messages %}<|im_start|>{{ message['role'] }}\n{% if message['content'] is string %}{{ message['content'] }}<|im_end|>\n{% else %}{% for content in message['content'] %}{% if content['type'] == 'image' or 'image' in content or 'image_url' in content %}{% set image_count.value = image_count.value + 1 %}{% if add_vision_id %}Picture {{ image_count.value }}: {% endif %}<|vision_start|><|image_pad|><|vision_end|>{% elif content['type'] == 'video' or 'video' in content %}{% set video_count.value = video_count.value + 1 %}{% if add_vision_id %}Video {{ video_count.value }}: {% endif %}<|vision_start|><|video_pad|><|vision_end|>{% elif 'text' in content %}{{ content['text'] }}{% endif %}{% endfor %}<|im_end|>\n{% endif %}{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}"
 
 def collate_fn(data_list: list[dict]) -> dict:
     """
@@ -81,7 +75,7 @@ def collate_fn(data_list: list[dict]) -> dict:
     return {**tensors, **non_tensors}
 
 
-class SFTDatasetMultiTurn(Dataset):
+class RLHFDatasetMultiTurn(Dataset):
     """
     Load and preprocess RLHF data from Parquet files.
 
@@ -119,13 +113,17 @@ class SFTDatasetMultiTurn(Dataset):
         self.image_key = config.get("image_key", "images")
         self.video_key = config.get("video_key", "videos")
         self.max_prompt_length = config.get("max_prompt_length", 1024)
-        
+        self.return_raw_chat = config.get("return_raw_chat", False)
+        self.return_full_prompt = config.get("return_full_prompt", False)
         self.truncation = config.get("truncation", "error")
         self.filter_overlong_prompts = config.get("filter_overlong_prompts", True)
 
         self.num_workers = config.get("filter_overlong_prompts_workers", max(1, os.cpu_count() // 4))
         self.num_workers = min(self.num_workers, os.cpu_count())
         self.use_shm = config.get("use_shm", False)
+        self.chat_template_func = config.get("chat_template_func", None)
+        self.need_tools_kwargs = config.get("need_tools_kwargs", False)
+        self.filter_prompts = config.get("filter_prompts", True)
         self.serialize_dataset = False
 
         # Initialize reward list
@@ -148,12 +146,14 @@ class SFTDatasetMultiTurn(Dataset):
             video_bases = [video_bases]
         self.video_bases = video_bases
         self.system_prompt = self._build_system_prompt(self.tool_schemas)
+        self.system_prompt_notool = self._build_system_prompt([])
         self.user_prompt_template = config.get("user_prompt_template", "TEMPORAL_GROUNDING_TEMPLATE")
         self.user_prompt_template = getattr(eval_prompts, self.user_prompt_template)
         logger.info(f"Initialized video bases: {self.video_bases}")
         logger.info(f"Initialized system prompt: {self.system_prompt}")
         logger.info(f"Initialized prompt template: {self.user_prompt_template}")
         print(f'In rl_dataset, self.user_prompt_template={self.user_prompt_template}')
+        print("Initialized RLHFDatasetMultiTurn for Qwen2.5-VL model")
 
         self._download()
         self._read_files_and_tokenize()
@@ -230,64 +230,19 @@ For each function call, return a json object with function name and arguments wi
                 image_content,
                 {"type": "text", "text": prompt}
             ]
-        messages = [
-            {
-                "role": "system",
-                "content": self.system_prompt,
-            }, {
-                "role": "user",
-                "content": user_content,
-            }
-        ]
-        if isinstance(example['solution'], str):
-            messages.append({
-                "role": "assistant",
-                "content": example['solution'],
-            })
-        elif isinstance(example['solution'], list):
-            assert len(example['solution']) == 2, "Only support 2 round conversation now."
-            assert 'video' in example
-            assert 'tool_params' in example
-            # assert 'answer' in example  # this is not needed in SFT
-            tool_st, tool_ed = eval(example['tool_params'])
-            messages.append({
-                "role": "assistant",
-                "content": example['solution'][0],
-            })
-            max_frames = 64
-            video_content = {
-                "type": "video",
-                "video": video_path,
-                "min_pixels": 4*28*28,
-                "max_pixels": 224*224,
-                "max_frames": max_frames,
-                "video_start": tool_st,
-                "video_end": tool_ed,
-            }
-            # print(video_content)
-            if isinstance(self.video_kwargs, dict):
-                video_content.update(self.video_kwargs)
-            if 'video_kwargs' in example and isinstance(example['video_kwargs'], dict):
-                video_content.update(example['video_kwargs'])
-            video_content['max_frames'] = max_frames
-            data["videos"].append(video_content)
-            messages.append({
-                "role": "tool",
-                "content": [
-                    video_content, 
-                    f"Video clip from {tool_st:.2f} to {tool_ed:.2f} seconds.",
-                ]
-            })
-            messages.append({
-                "role": "assistant",
-                "content": example['solution'][1],
-            })
         data.update({
-            "data_source": example['data_source'] if 'data_source' in example else 'N/A',
-            "prompt": messages,
+            "data_source": './data/' + example['data_source'],
+            "prompt": [ 
+                {
+                    "role": "system",
+                    "content": self.system_prompt if 'video' in example else self.system_prompt_notool,
+                }, {
+                    "role": "user",
+                    "content": user_content,
+                } 
+            ],
             "ability": "temporal grounding",
-            # "reward_model": {"style": "rule", "ground_truth": eval(example['answer'])},
-            "reward_model": {"style": "rule", "ground_truth": None},
+            "reward_model": {"style": "rule", "ground_truth": example['solution']},
             "extra_info": {
                 "split": 'train',
                 "index": idx,
@@ -296,6 +251,7 @@ For each function call, return a json object with function name and arguments wi
                 "tools_kwargs": {
                     "video_path": video_path,
                     "duration": duration,
+                    **self.video_kwargs,
                 },
                 "reward_list": self.reward_list,
             },
@@ -319,17 +275,8 @@ For each function call, return a json object with function name and arguments wi
 
         dataframe_images = []
         dataframe_videos = []
-        # Filter out overly long prompts (so that the rollout during RL might exceed context length), and invalid ground truth
         if self.filter_overlong_prompts:
             def filter_fn(doc):
-                prompt_text = self.tokenizer.apply_chat_template(doc["prompt"], add_generation_prompt=True, tokenize=False)
-                prompt_tokens = self.tokenizer.tokenize(prompt_text)
-
-                all_token_length = len(prompt_tokens)
-                # TODO: check what does 4096 and 2048 mean
-                if all_token_length + 4096 + 2048 > self.max_prompt_length:
-                    print(f'filter item out, {all_token_length=} + 4096 + 2048 > {self.max_prompt_length=}, item id = {doc["extra_info"]["index"]}')
-                    return False
                 gt = doc["reward_model"]["ground_truth"]
                 if isinstance(gt, list) and len(gt) == 2:
                     st, ed = gt
@@ -347,11 +294,10 @@ For each function call, return a json object with function name and arguments wi
 
         # interleave them in one line
         if len(dataframe_images) > 0 and len(dataframe_videos) > 0:
-            self.dataframe = dataframe_images + dataframe_videos
-            # random.shuffle(dataframe_images)
-            # random.shuffle(dataframe_videos)
+            random.shuffle(dataframe_images)
+            random.shuffle(dataframe_videos)
             # image : video == 1 : 1
-            # self.dataframe = [x for item in zip(dataframe_images, dataframe_videos) for x in item]
+            self.dataframe = [x for item in zip(dataframe_images, dataframe_videos) for x in item]
             # image : video == 1 : 3    
             # min_len = min(len(dataframe_images), len(dataframe_videos) // 3)
             # self.dataframe = []
@@ -376,49 +322,12 @@ For each function call, return a json object with function name and arguments wi
         return len(self.dataframe)
 
     def __getitem__(self, item):
-        while True:
-            try:
-                res = self.getitem(item)
-                return res
-            except Exception as e:
-                print(f"error item {item}: {e}, try another")
-                item = random.randint(0, len(self.dataframe) - 1)
+        """
+        A Wrapper function to handle exceptions from getitem().
+        """
+        res = self.getitem(item)
         return res
-
-    def _resolve_video_path(self, video_path: str) -> str:
-        """
-        Resolve the actual video path on disk when the true extension is unknown.
-        Given something like '/path/abc123.mp4', this function:
-        1. Extracts video_id = 'abc123'
-        2. Searches the directory for files matching 'abc123*'
-        3. If found, returns the first match
-        4. Otherwise returns default '<dir>/abc123.mp4'
-
-        This ensures we correctly pick up files like:
-            abc123.f243.mp4
-            abc123.f251.webm
-            abc123.mkv
-            abc123.mp4
-        """
-        video_dir = os.path.dirname(video_path)
-        filename = os.path.basename(video_path)
-
-        # Extract ID (before first dot)
-        video_id = filename.split('.')[0]
-
-        # Look for any file starting with that ID, with any extension
-        pattern = os.path.join(video_dir, f"{video_id}*")
-        matches = glob.glob(pattern)
-
-        if matches:
-            # Return the most relevant: shortest filename wins (abc123.mp4 over abc123.f243.mp4)
-            matches.sort(key=lambda x: len(os.path.basename(x)))
-            print(f'-- successfully resolved --')
-            return matches[0]
-
-        # fallback: use the original video path
-        return video_path
-
+        
     def getitem(self, item):
         """
         Note that we also return the raw_input_ids so that it can be combined with other chat template
@@ -427,162 +336,135 @@ For each function call, return a json object with function name and arguments wi
         messages = row_dict.pop(self.prompt_key)
         model_inputs = {}
 
-        assert self.processor is not None
-        input_id_list = []
-        attention_mask_list = []
-        loss_mask_list = []
-        second_per_grid_ts_list = []
-        image_grid_thw_list = []
-        video_grid_thw_list = []
-        for message in messages:
-            raw_prompt = self.processor.apply_chat_template([message], tokenize=False, chat_template=CHAT_TEMPLATE_NO_SYS)  # Important
-            msg_images_list = []
-            msg_videos_list = []
-            if isinstance(message['content'], list):
-                for msg in message['content']:
-                    if 'image' in msg:
-                        msg_images_list.append(msg)
-                    elif 'video' in msg:
-                        msg_videos_list.append(msg)
+        if self.processor is not None:
+
+            raw_prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+            multi_modal_data = {}
+            mm_processor_kwargs = {}
+
             images = None
-            if len(msg_images_list) > 0:
-                images = [process_image(image) for image in msg_images_list]
+            if self.image_key in row_dict:
+                images = [process_image(image) for image in row_dict.pop(self.image_key)]
+                multi_modal_data["image"] = images
+                mm_processor_kwargs["fps"] = []
+
             videos = None
-            fps_list = None
-            fake_metadata_list = []
-            # Example: msg_videos_list = [{'type': 'video', 'video': '/data/user_data/jamesdin/data/charades/E1VFZ.mp4', 'min_pixels': 3136, 'max_pixels': 50176, 'max_frames': 128, 'draw_number': True, 'parallel': True}]
-            if len(msg_videos_list) > 0:
+            if self.video_key in row_dict:
                 videos = []
-                fps_list = []
-                for video in msg_videos_list:
+                multi_modal_data["video"] = []
+                mm_processor_kwargs["fps"] = []
+                for video in row_dict.pop(self.video_key):
                     # try to load from frame
                     video_path = video['video']
-                    # TODO: enable this line when using pre-extracted frames
-                    video_base_dir = os.path.dirname(video_path)
-                    video_filename = os.path.basename(video_path)
-                    video_frame_path = os.path.join(video_base_dir, video_filename.split('.')[0])
-                    
-                    # Try YouTube ID extraction as fallback
-                    if not os.path.exists(video_frame_path):
-                        from download_and_extract_frames import extract_youtube_id
-                        youtube_id = extract_youtube_id(video_filename.split('.')[0])
-                        video_frame_path = os.path.join(video_base_dir, youtube_id)
-                    
-                    # print(f'video_frame_path={video_frame_path}, os.path.exists(video_frame_path)={os.path.exists(video_frame_path)}')/
-                    # TODO: enable below lines when using raw video
-                    # video_frame_path = self._resolve_video_path(video_path)
+                    video_frame_path = video_path.split('.')[0]
+                    fps = 2.0
+                    # print(f"video_frame_path={video_frame_path}, os.path.exists(video_frame_path)={os.path.exists(video_frame_path)}")
                     if os.path.exists(video_frame_path):
-                        # load from pre-extracted frames
                         frame_paths = os.listdir(video_frame_path)
                         frame_paths = sorted(frame_paths, key=lambda x: int(x.split("_")[-1].split(".")[0]))
                         frame_paths = [os.path.join(video_frame_path, frame_path) for frame_path in frame_paths]
+                        total_frames = len(frame_paths)
+                        # max_frames = video.get('max_frames', None)
+                        # if max_frames is not None and total_frames > max_frames:
+                        #     idx = torch.linspace(0, total_frames - 1, max_frames).round().long()
+                        #     frame_paths = [frame_paths[i] for i in idx]
+                        #     fps = max_frames / max(total_frames, 1e-6) * fps
                         video_path = frame_paths
                         video['video'] = video_path
-                        video['fps'] = DEFAULT_FPS  # tell the processor to assume that the video has this fps (because we pre-sampled it this way)
+                        video['fps'] = fps
+                    else:
+                        # directly raise error instead of trying to process the video
+                        raise FileNotFoundError(f"Video file for {video_path} not found.")
                     # new_video, fps = cached_process_video(video)
                     new_video, fps = process_video(video)
                     videos.append(new_video)
-                    fps_list.append(fps)
-                    
-                    n_frames = len(new_video)
-                    fake_metadata = VideoMetadata(
-                            total_num_frames=n_frames,
-                            fps=DEFAULT_FPS,
-                            duration=n_frames / DEFAULT_FPS,
-                            frames_indices=np.arange(n_frames),
-                        )
-                    fake_metadata_list.append(fake_metadata)
-            # 1. tokenize the text; 2. normalize shape of visual inputs; 3. packs everything into a dict of tensors
-            # TODO: pass in a list to fps parameter will cause error, we pass in fps=2.0 instead
-            # This is caused by the implementation difference of Qwen2.5 and Qwen3 Processor:
-            # Qwen2.5: https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/processing_qwen2_5_vl.py
-            # Qwen3: https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen3_vl/processing_qwen3_vl.py
-            # model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, fps=DEFAULT_FPS, return_tensors="pt")
-            # 2 Options: Process from raw video or from pre-extracted frames
-            if videos is not None and len(videos) > 0:
-                if isinstance(videos[0], torch.Tensor):  # Raw Video, require sampling at DEFAULT_FPS, much slower
-                    model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, fps=DEFAULT_FPS, return_tensors="pt")
-                else:  # Pre-extracted Frames, force not to sample
-                    model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, videos_kwargs={"video_metadata": fake_metadata_list, "return_metadata": True}, return_tensors="pt")
-            else:  # No Video
-                model_inputs = self.processor(text=[raw_prompt], images=images, return_tensors="pt")
+                    multi_modal_data["video"].append(new_video)
+                    mm_processor_kwargs["fps"].append(fps)
 
-            input_id_list.append(model_inputs["input_ids"])
-            attn_mask = model_inputs["attention_mask"]
-            attention_mask_list.append(attn_mask)
-            if message['role'] == 'assistant':
-                loss_mask = attn_mask.clone()
-                prefix = '<|im_start|>assistant\n'
-                prefix_ids = self.tokenizer.tokenize(prefix)
-                loss_mask[:, :len(prefix_ids)] = 0
-            else:
-                loss_mask = torch.zeros_like(attn_mask)
-            loss_mask_list.append(loss_mask)
+            model_inputs = self.processor(text=[raw_prompt], images=images, videos=videos, fps=mm_processor_kwargs["fps"], return_tensors="pt")
+
+            input_ids = model_inputs.pop("input_ids")
+            attention_mask = model_inputs.pop("attention_mask")
+
             if "second_per_grid_ts" in model_inputs:
-                second_per_grid_ts_list.append(model_inputs["second_per_grid_ts"])
-            if "image_grid_thw" in model_inputs:
-                image_grid_thw_list.append(model_inputs["image_grid_thw"])
-            if "video_grid_thw" in model_inputs:
-                video_grid_thw_list.append(model_inputs["video_grid_thw"])
+                model_inputs["second_per_grid_ts"] = torch.tensor(model_inputs["second_per_grid_ts"])
 
-        input_ids = torch.cat(input_id_list, dim=1)
-        attention_mask = torch.cat(attention_mask_list, dim=1)
-        loss_mask = torch.cat(loss_mask_list, dim=1)
+            # There's a trap here, multi_modal_inputs has to be a dict, not BatchFeature
+            row_dict["multi_modal_data"] = multi_modal_data
+            row_dict["mm_processor_kwargs"] = mm_processor_kwargs
 
-        if len(second_per_grid_ts_list) > 0:
-            second_per_grid_ts = torch.tensor([x for li in second_per_grid_ts_list for x in li])
-        else:
-            second_per_grid_ts = None
-        if len(image_grid_thw_list) > 0:
-            image_grid_thw = torch.cat(image_grid_thw_list, dim=0)
-        else:
-            image_grid_thw = None
-        if len(video_grid_thw_list) > 0:
-            video_grid_thw = torch.cat(video_grid_thw_list, dim=0)
-        else:
-            video_grid_thw = None
+            row_dict["multi_modal_inputs"] = dict(model_inputs)
 
-        loss_mask = torch.cat([loss_mask[:, 1:], torch.zeros_like(loss_mask[:, :1])], dim=1)
-        input_ids, attention_mask, loss_mask = verl_F.postprocess_data(
+            # second_per_grid_ts isn't used for training, just for mrope
+            # row_dict["multi_modal_inputs"].pop("second_per_grid_ts", None)
+
+        else:
+            raw_prompt = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+            model_inputs = self.tokenizer(raw_prompt, return_tensors="pt", add_special_tokens=False)
+            input_ids = model_inputs.pop("input_ids")
+            attention_mask = model_inputs.pop("attention_mask")
+
+        input_ids, attention_mask = verl_F.postprocess_data(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            loss_mask=loss_mask,
             max_length=self.max_prompt_length,
             pad_token_id=self.tokenizer.pad_token_id,
-            left_pad=False,
+            left_pad=True,
             truncation=self.truncation,
         )
+
         if self.processor is not None and 'Qwen' in self.processor.image_processor.__class__.__name__:  # little trick, support qwen2.5-vl
-            from verl.models.transformers.qwen3_vl import get_rope_index
-            logger.debug(f'>>> in rl_dataset: start use get_rope_index, {video_grid_thw=}, {second_per_grid_ts=}')
+            from verl.models.transformers.qwen2_vl import get_rope_index
+            logger.debug(f'>>> in rl_dataset: start use get_rope_index, video_grid_thw={model_inputs.get("video_grid_thw")}, second_per_grid_ts={model_inputs.get("second_per_grid_ts")}')
             position_ids = [
                 get_rope_index(
                     self.processor,
                     input_ids=input_ids[0],
-                    image_grid_thw=image_grid_thw,
-                    video_grid_thw=video_grid_thw,
-                    second_per_grid_ts=second_per_grid_ts,
+                    image_grid_thw=model_inputs.get("image_grid_thw"),
+                    video_grid_thw=model_inputs.get("video_grid_thw"),
+                    second_per_grid_ts=model_inputs.get("second_per_grid_ts"),
                     attention_mask=attention_mask[0],
                 )
             ]  # (1, 3, seq_len)
+
         else:
             position_ids = compute_position_id_with_mask(attention_mask)
-        
-        input_ids = input_ids[0]
-        attention_mask = attention_mask[0]
-        position_ids = position_ids[0]
-        loss_mask = loss_mask[0]
 
-        # if prompt_length > 1:
-        #     loss_mask[: min(prompt_length, loss_mask.size(0)) - 1] = 0
-        # loss_mask[min(prompt_length + response_length, loss_mask.size(0)) - 1] = 0
+        row_dict["input_ids"] = input_ids[0]
+        row_dict["attention_mask"] = attention_mask[0]
+        row_dict["position_ids"] = position_ids[0]
 
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "position_ids": position_ids,
-            "loss_mask": loss_mask,
-        }
+        raw_prompt_ids = self.tokenizer.encode(raw_prompt, add_special_tokens=False)
+        if len(raw_prompt_ids) > self.max_prompt_length:
+            if self.truncation == "left":
+                raw_prompt_ids = raw_prompt_ids[-self.max_prompt_length :]
+            elif self.truncation == "right":
+                raw_prompt_ids = raw_prompt_ids[: self.max_prompt_length]
+            elif self.truncation == "middle":
+                left_half = self.max_prompt_length // 2
+                right_half = self.max_prompt_length - left_half
+                raw_prompt_ids = raw_prompt_ids[:left_half] + raw_prompt_ids[-right_half:]
+            elif self.truncation == "error":
+                raise RuntimeError(f"Prompt length {len(raw_prompt_ids)} is longer than {self.max_prompt_length}.")
+
+        row_dict["raw_prompt_ids"] = raw_prompt_ids
+        # encode prompts without chat template
+        if self.return_raw_chat:
+            row_dict["raw_prompt"] = messages
+
+        # get prompts with chat template
+        if self.return_full_prompt:
+            row_dict["full_prompts"] = raw_prompt  # array of strings
+
+        # add index for each prompt
+        index = row_dict.get("extra_info", {}).get("index", 0)
+        tools_kwargs = row_dict.get("extra_info", {}).get("tools_kwargs", {})
+        need_tools_kwargs = row_dict.get("extra_info", {}).get("need_tools_kwargs", self.need_tools_kwargs)
+        if need_tools_kwargs and not tools_kwargs:
+            logger.warning("tools_kwargs is empty for index {}, data source: {}", index, row_dict["data_source"])
+        row_dict["index"] = index
+        row_dict["tools_kwargs"] = tools_kwargs
+        return row_dict
 
     def __getstate__(self):
         if not self.serialize_dataset:

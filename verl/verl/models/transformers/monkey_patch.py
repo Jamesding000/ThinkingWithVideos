@@ -221,14 +221,16 @@ def apply_monkey_patch(
 
     # TODO: VLM models only, unify monkey patch to LLM models.
     if model.config.model_type == "qwen2_5_vl":
-        from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-            Qwen2_5_VLFlashAttention2,
-        )
+        # apply patch following https://github.com/volcengine/verl/pull/2215/files
+        if is_transformers_version_in_range(min_version="4.53.0"):
+            from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLAttention
+        else:
+            from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLFlashAttention2 as Qwen2_5_VLAttention
 
         if use_remove_padding or ulysses_sp_size > 1:
             from verl.models.transformers.qwen2_vl import ulysses_flash_attn_forward
 
-            Qwen2_5_VLFlashAttention2.forward = ulysses_flash_attn_forward
+            Qwen2_5_VLAttention.forward = ulysses_flash_attn_forward
             print("Monkey patch FlashAttention2.forward in Qwen2.5VL")
 
         if ulysses_sp_size > 1:

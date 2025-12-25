@@ -280,6 +280,15 @@ For each function call, return a json object with function name and arguments wi
         dataframe_videos = []
         if self.filter_overlong_prompts:
             def filter_fn(doc):
+                # prompt_text = self.tokenizer.apply_chat_template(doc["prompt"], add_generation_prompt=True, tokenize=False)
+                # prompt_tokens = self.tokenizer.tokenize(prompt_text)
+                # print(f'### prompt_tokens: len(prompt_tokens)={len(prompt_tokens)}')
+
+                # all_token_length = len(prompt_tokens)
+                # # TODO: check what does 4096 and 2048 mean
+                # if all_token_length + 4096 + 2048 > self.max_prompt_length:
+                #     print(f'filter item out, {all_token_length=} + 4096 + 2048 > {self.max_prompt_length=}, item id = {doc["extra_info"]["index"]}')
+                #     return False
                 gt = doc["reward_model"]["ground_truth"]
                 if isinstance(gt, list) and len(gt) == 2:
                     st, ed = gt
@@ -323,8 +332,21 @@ For each function call, return a json object with function name and arguments wi
 
     def __len__(self):
         return len(self.dataframe)
-
+    
     def __getitem__(self, item):
+        """
+        A Wrapper function to handle exceptions from getitem().
+        """
+        while True:
+            try:
+                res = self.getitem(item)
+                return res
+            except Exception as e:
+                print(f"error item {item}: {e}, try another")
+                item = random.randint(0, len(self.dataframe) - 1)
+        return res
+
+    def getitem(self, item):
         """
         Note that we also return the raw_input_ids so that it can be combined with other chat template
         """
@@ -333,6 +355,17 @@ For each function call, return a json object with function name and arguments wi
         model_inputs = {}
 
         if self.processor is not None:
+            # TODO: debug check, delete later
+            # raw_prompt = self.processor.apply_chat_template(
+            #     messages, add_generation_prompt=True, tokenize=False
+            # )
+            # tokenized = self.processor.tokenizer(
+            #     raw_prompt,
+            #     add_special_tokens=False,
+            #     return_tensors=None,
+            # )
+            # num_text_tokens = len(tokenized["input_ids"])
+            # print(f"### raw prompt token length = {num_text_tokens}")
 
             raw_prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
             multi_modal_data = {}
@@ -405,6 +438,7 @@ For each function call, return a json object with function name and arguments wi
             # print('pixel_values_videos', model_inputs['pixel_values_videos'].shape)
             # print("input_ids", model_inputs['input_ids'].shape)
             # print('attention_mask', model_inputs['attention_mask'].shape)
+            # print(f'merge_sizes: image={self.processor.image_processor.merge_size}, video={self.processor.video_processor.merge_size}')
             
             input_ids = model_inputs.pop("input_ids")
             attention_mask = model_inputs.pop("attention_mask")

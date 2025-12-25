@@ -54,7 +54,11 @@ import uuid
 from verl.tools.base_tool import initialize_tools_from_config
 from verl.utils import hf_tokenizer, hf_processor
 from verl.utils.debug.performance import _timer
-from verl.models.transformers.qwen2_vl import get_rope_index
+from transformers.video_utils import VideoMetadata
+import numpy as np
+
+DEFAULT_FPS = 2.0
+
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -397,6 +401,8 @@ class vLLMRolloutMultiTurnSync(BaseRollout):
                             "multi_modal_data": vllm_inputs[idx]["multi_modal_data"],
                             "mm_processor_kwargs": vllm_inputs[idx]["mm_processor_kwargs"],
                         })
+                    # print('active_vllm_inputs[0].keys()', active_vllm_inputs[0].keys())
+                    # print('active_vllm_inputs[0]', active_vllm_inputs[0])
                     outputs = self.inference_engine.generate(
                         prompts=active_vllm_inputs,
                         sampling_params=self.sampling_params,
@@ -457,56 +463,185 @@ class vLLMRolloutMultiTurnSync(BaseRollout):
                                 tool_result = error_msg
 
                         if tool_result != "":
+                            # breakpoint()
                             with _timer("generation/postprocess_tool", generation_timing):
-                                if isinstance(tool_result, str):  # text result, either caption, answer or error msg
-                                    new_content = tool_result
-                                    new_prompt_str = tool_result
-                                    new_videos = None
-                                    new_fps = None
-                                elif isinstance(tool_result, dict):  # multimodal result, new video + text
-                                    teaser = f"Video clip from {tool_result['start_time']:.2f} to {tool_result['end_time']:.2f} seconds."
-                                    new_content = [
-                                        tool_result["ele"],
-                                        {
-                                            "type": "text",
-                                            "text": teaser
-                                        }
-                                    ]
-                                    new_prompt_str = "<|vision_start|><|video_pad|><|vision_end|>" + teaser
-                                    new_videos = [tool_result["video"]]
-                                    new_fps = [tool_result["fps"]]
-                                    vllm_inputs[idx]["multi_modal_data"]["video"].extend(new_videos)
-                                    vllm_inputs[idx]["mm_processor_kwargs"]["fps"].extend(new_fps)
-                                new_message = {
-                                    "role": "tool",
-                                    "content": new_content,
-                                }
-                                vllm_inputs[idx]["messages"].append(new_message)
-                                new_prompt = "<|im_end|>\n"
-                                new_prompt += f"<|im_start|>{new_message['role']}\n"
-                                new_prompt += new_prompt_str
-                                new_prompt += "<|im_end|>\n"
-                                new_prompt += "<|im_start|>assistant\n"
-                                new_inputs = self.processor(text=[new_prompt], images=None, videos=new_videos, fps=new_fps, return_tensors="pt")  # a list [1, L]
-                                new_token_ids = list(new_inputs.input_ids[0])
-                                new_position_ids = get_rope_index(
-                                    self.processor,
-                                    input_ids=new_inputs.input_ids[0],
-                                    image_grid_thw=None,
-                                    video_grid_thw=new_inputs.get("video_grid_thw"),
-                                    second_per_grid_ts=new_inputs.get("second_per_grid_ts"),
-                                    attention_mask=new_inputs.attention_mask[0],
-                                ).to(prompts_ids.device)
-                                response_ids[idx].extend(new_token_ids)
-                                delta_position_ids[idx].append(new_position_ids + st_indexs[idx])
-                                st_indexs[idx] += new_position_ids[:, -1].max() + 1  # a trap
-                                response_loss_masks[idx].extend([0] * len(new_token_ids))
-                                rollout_log_probs[idx].extend([-1] * len(new_token_ids))
-                                if new_videos is not None:
-                                    multi_modal_inputs[idx]["pixel_values_videos"] = torch.cat([multi_modal_inputs[idx]["pixel_values_videos"], new_inputs["pixel_values_videos"]], dim=0)
-                                    multi_modal_inputs[idx]["video_grid_thw"] = torch.cat([multi_modal_inputs[idx]["video_grid_thw"], new_inputs["video_grid_thw"]], dim=0)
-                                    multi_modal_inputs[idx]["second_per_grid_ts"] = torch.cat([multi_modal_inputs[idx]["second_per_grid_ts"], torch.tensor(new_inputs["second_per_grid_ts"])], dim=0)
+                                # Determine processor type once
+                                is_qwen2_5 = 'Qwen2_5' in self.processor.__class__.__name__
+                                is_qwen3 = 'Qwen3' in self.processor.__class__.__name__
+                                
+                                if not (is_qwen2_5 or is_qwen3):
+                                    raise ValueError(f"Unsupported processor: {self.processor.__class__.__name__}")
+
+                                if is_qwen2_5:
+                                    # Qwen2.5 implementation
+                                    from verl.models.transformers.qwen2_vl import get_rope_index
+                                    if isinstance(tool_result, str):  # text result, either caption, answer or error msg
+                                        new_content = tool_result
+                                        new_prompt_str = tool_result
+                                        new_videos = None
+                                        new_fps = None
+                                    elif isinstance(tool_result, dict):  # multimodal result, new video + text
+                                        teaser = f"Video clip from {tool_result['start_time']:.2f} to {tool_result['end_time']:.2f} seconds."
+                                        new_content = [
+                                            tool_result["ele"],
+                                            {
+                                                "type": "text",
+                                                "text": teaser
+                                            }
+                                        ]
+                                        new_prompt_str = "<|vision_start|><|video_pad|><|vision_end|>" + teaser
+                                        new_videos = [tool_result["video"]]
+                                        new_fps = [tool_result["fps"]]
+                                        vllm_inputs[idx]["multi_modal_data"]["video"].extend(new_videos)
+                                        vllm_inputs[idx]["mm_processor_kwargs"]["fps"].extend(new_fps)
                                     
+                                    new_message = {
+                                        "role": "tool",
+                                        "content": new_content,
+                                    }
+                                    vllm_inputs[idx]["messages"].append(new_message)
+                                    new_prompt = "<|im_end|>\n"
+                                    new_prompt += f"<|im_start|>{new_message['role']}\n"
+                                    new_prompt += new_prompt_str
+                                    new_prompt += "<|im_end|>\n"
+                                    new_prompt += "<|im_start|>assistant\n"
+                                    new_inputs = self.processor(text=[new_prompt], images=None, videos=new_videos, fps=new_fps, return_tensors="pt")
+                                    new_token_ids = list(new_inputs.input_ids[0])
+                                    new_position_ids = get_rope_index(
+                                        self.processor,
+                                        input_ids=new_inputs.input_ids[0],
+                                        image_grid_thw=None,
+                                        video_grid_thw=new_inputs.get("video_grid_thw"),
+                                        second_per_grid_ts=new_inputs.get("second_per_grid_ts"),
+                                        attention_mask=new_inputs.attention_mask[0],
+                                    ).to(prompts_ids.device)
+                                    response_ids[idx].extend(new_token_ids)
+                                    delta_position_ids[idx].append(new_position_ids + st_indexs[idx])
+                                    st_indexs[idx] += new_position_ids[:, -1].max() + 1  # a trap
+                                    response_loss_masks[idx].extend([0] * len(new_token_ids))
+                                    rollout_log_probs[idx].extend([-1] * len(new_token_ids))
+                                    if new_videos is not None:
+                                        multi_modal_inputs[idx]["pixel_values_videos"] = torch.cat([multi_modal_inputs[idx]["pixel_values_videos"], new_inputs["pixel_values_videos"]], dim=0)
+                                        multi_modal_inputs[idx]["video_grid_thw"] = torch.cat([multi_modal_inputs[idx]["video_grid_thw"], new_inputs["video_grid_thw"]], dim=0)
+                                        multi_modal_inputs[idx]["second_per_grid_ts"] = torch.cat([multi_modal_inputs[idx]["second_per_grid_ts"], torch.tensor(new_inputs["second_per_grid_ts"])], dim=0)
+                                
+                                else:  # Qwen3 implementation
+                                    from verl.models.transformers.qwen3_vl import get_rope_index
+                                    new_videos = None
+                                    fake_metadata_list = None
+
+                                    if isinstance(tool_result, str):  # text result, either caption, answer or error msg
+                                        new_content = tool_result
+                                        new_prompt_str = tool_result
+                                    elif isinstance(tool_result, dict):  # multimodal result, new video + text
+                                        teaser = f"Video clip from {tool_result['start_time']:.2f} to {tool_result['end_time']:.2f} seconds."
+                                        new_content = [
+                                            tool_result["ele"],
+                                            {"type": "text", "text": teaser},
+                                        ]
+                                        new_prompt_str = "<|vision_start|><|video_pad|><|vision_end|>" + teaser
+
+                                        new_video = tool_result["video"]          # list[PIL.Image]
+                                        n_frames = len(new_video)
+                                        new_videos = None
+                                        fake_metadata_list = None
+
+                                        if n_frames > 0:
+                                            # 1) compute clip duration and effective fps
+                                            start_t = float(tool_result["start_time"])
+                                            end_t = float(tool_result["end_time"])
+                                            duration = max(end_t - start_t, 1e-6)
+                                            fps_clip = float(n_frames) / duration
+
+                                            # 2) create metadata: we already have sampled frames, so use the clip fps
+                                            fake_metadata = VideoMetadata(
+                                                total_num_frames=n_frames,
+                                                fps=fps_clip,
+                                                duration=duration,
+                                                frames_indices=np.arange(n_frames),
+                                            )
+                                            fake_metadata_list = [fake_metadata]
+
+                                            # 3) vLLM multi-modal cache: (video, metadata_dict)
+                                            meta_dict = {k: v for k, v in dict(fake_metadata).items() if v is not None}
+                                            meta_dict["do_sample_frames"] = False
+
+                                            # Keep fps list in sync for vLLM mm_processor_kwargs
+                                            vllm_inputs[idx]["multi_modal_data"]["video"].append((new_video, meta_dict))
+                                            vllm_inputs[idx]["mm_processor_kwargs"].setdefault("fps", [])
+                                            vllm_inputs[idx]["mm_processor_kwargs"]["fps"].append(fps_clip)
+
+                                            # 4) For HF processor, we pass raw frames; metadata goes via videos_kwargs
+                                            new_videos = [new_video]
+                                        else:
+                                            new_videos = None
+                                            fake_metadata_list = None
+
+                                    # Append tool message to chat
+                                    new_message = {
+                                        "role": "tool",
+                                        "content": new_content,
+                                    }
+                                    vllm_inputs[idx]["messages"].append(new_message)
+
+                                    new_prompt = "<|im_end|>\n"
+                                    new_prompt += f"<|im_start|>{new_message['role']}\n"
+                                    new_prompt += new_prompt_str
+                                    new_prompt += "<|im_end|>\n"
+                                    new_prompt += "<|im_start|>assistant\n"
+
+                                    # --- Qwen3 processor call ---
+                                    if new_videos is not None:
+                                        new_inputs = self.processor(
+                                            text=[new_prompt],
+                                            images=None,
+                                            videos=new_videos,
+                                            videos_kwargs={
+                                                "video_metadata": fake_metadata_list,
+                                                "do_sample_frames": False,
+                                                "return_metadata": True,
+                                            },
+                                            return_tensors="pt",
+                                        )
+                                    else:
+                                        new_inputs = self.processor(
+                                            text=[new_prompt],
+                                            images=None,
+                                            return_tensors="pt",
+                                        )
+
+                                    new_token_ids = list(new_inputs.input_ids[0])
+                                    new_position_ids = get_rope_index(
+                                        self.processor,
+                                        input_ids=new_inputs.input_ids[0],
+                                        image_grid_thw=None,
+                                        video_grid_thw=new_inputs.get("video_grid_thw"),
+                                        second_per_grid_ts=new_inputs.get("second_per_grid_ts"),
+                                        attention_mask=new_inputs.attention_mask[0],
+                                    ).to(prompts_ids.device)
+
+                                    response_ids[idx].extend(new_token_ids)
+                                    delta_position_ids[idx].append(new_position_ids + st_indexs[idx])
+                                    st_indexs[idx] += new_position_ids[:, -1].max() + 1  # a trap
+                                    response_loss_masks[idx].extend([0] * len(new_token_ids))
+                                    rollout_log_probs[idx].extend([-1] * len(new_token_ids))
+
+                                    if new_videos is not None:
+                                        multi_modal_inputs[idx]["pixel_values_videos"] = torch.cat(
+                                            [multi_modal_inputs[idx]["pixel_values_videos"], new_inputs["pixel_values_videos"]],
+                                            dim=0,
+                                        )
+                                        multi_modal_inputs[idx]["video_grid_thw"] = torch.cat(
+                                            [multi_modal_inputs[idx]["video_grid_thw"], new_inputs["video_grid_thw"]],
+                                            dim=0,
+                                        )
+                                        # print('multi_modal_inputs[idx]', multi_modal_inputs[idx])
+                                        # print('new_inputs["second_per_grid_ts"]', new_inputs["second_per_grid_ts"])
+                                        # # new_inputs["second_per_grid_ts"] is already a tensor for Qwen3
+                                        # multi_modal_inputs[idx]["second_per_grid_ts"] = torch.cat(
+                                        #     [multi_modal_inputs[idx]["second_per_grid_ts"], new_inputs["second_per_grid_ts"]],
+                                        #     dim=0,
+                                        # )
                 active_num_list.append(active_mask.sum().item())
                 turns_stats[active_mask] += 1
 

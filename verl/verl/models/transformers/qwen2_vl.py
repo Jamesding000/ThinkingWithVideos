@@ -37,7 +37,14 @@ try:
 
     _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_func).parameters)
 except ImportError:
-    flash_attn_varlen_func = None
+    try:
+        # Try alternate import path for newer transformers versions
+        from flash_attn import flash_attn_func, flash_attn_varlen_func
+        _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_func).parameters)
+    except ImportError:
+        flash_attn_func = None
+        flash_attn_varlen_func = None
+        _flash_supports_window_size = False
 
 
 def get_rope_index(
@@ -406,7 +413,7 @@ def ulysses_flash_attn_forward(
     position_ids: Optional[torch.LongTensor] = None,
     position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.46
     **kwargs,
-) -> Tuple[torch.Tensor, None, None]:
+) -> Tuple[torch.Tensor, None]:
     from transformers.models.qwen2_vl.modeling_qwen2_vl import apply_multimodal_rotary_pos_emb, repeat_kv
 
     bsz, q_len, _ = hidden_states.size()  # q_len = seq_length / sp_size
@@ -461,7 +468,7 @@ def ulysses_flash_attn_forward(
         dropout=dropout_rate,
         sliding_window=sliding_window,
         is_causal=self.is_causal,
-        use_top_left_mask=self._flash_attn_uses_top_left_mask,
+        use_top_left_mask=getattr(self, "_flash_attn_uses_top_left_mask", True),
         position_ids=position_ids,  # important: pass position ids
     )  # (batch_size, seq_length, num_head / sp_size, head_size)
     if ulysses_sp_size > 1:
@@ -469,7 +476,7 @@ def ulysses_flash_attn_forward(
 
     attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
     attn_output = self.o_proj(attn_output)
-    return attn_output, None, None
+    return attn_output, None
 
 
 @dataclass
