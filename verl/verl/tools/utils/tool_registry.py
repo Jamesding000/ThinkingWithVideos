@@ -110,7 +110,7 @@ def initialize_tools_from_config(tools_config_file):
     try:
         for tool_config in tools_config.tools:
             cls_name = tool_config.class_name
-            tool_type = ToolType(tool_config.config.type)
+            tool_type = ToolType(tool_config.config.get("type", "native"))
             tool_cls = get_tool_class(cls_name)
 
             match tool_type:

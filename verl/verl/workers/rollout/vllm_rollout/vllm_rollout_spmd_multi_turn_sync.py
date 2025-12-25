@@ -53,7 +53,7 @@ import re
 import uuid
 from verl.tools.base_tool import initialize_tools_from_config
 from verl.utils import hf_tokenizer, hf_processor
-from verl.utils.debug.performance import _timer
+from verl.utils.debug.performance import simple_timer as _timer
 from transformers.video_utils import VideoMetadata
 import numpy as np
 
@@ -120,18 +120,20 @@ def parse_output(output_text):
     }
 
 class vLLMRolloutMultiTurnSync(BaseRollout):
-    def __init__(self, model_path: str, config: DictConfig, tokenizer, model_hf_config, **kwargs):
+    def __init__(self, config, model_config, device_mesh, **kwargs):
         """A vLLM rollout. It requires the module is supported by the vllm.
 
         Args:
-            module: module here follows huggingface APIs
-            config: DictConfig
-            tokenizer: the task/model tokenizer
-            model_hf_config: the huggingface config to initiallize the generating model in vllm
+            config: RolloutConfig
+            model_config: HFModelConfig containing model path, tokenizer, etc.
+            device_mesh: DeviceMesh for distributed training
             **kwargs: train_tp, for Megatron Backend to initialize hybrid engine (zero redundancy) process group
         """
-        super().__init__()
+        super().__init__(config, model_config, device_mesh)
         self.config = config
+        model_path = model_config.model_path
+        tokenizer = model_config.tokenizer
+        model_hf_config = model_config.hf_config
         assert not (not config.enforce_eager and config.free_cache_engine), "disable CUDA graph (enforce_eager = False) if free cache engine"
 
         tensor_parallel_size = self.config.get("tensor_model_parallel_size", 1)
@@ -705,3 +707,23 @@ class vLLMRolloutMultiTurnSync(BaseRollout):
 
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch, meta_info={'generation_timing': generation_timing})
 
+    async def resume(self, tags: list[str]):
+        """Resume rollout weights or kv cache in GPU memory.
+
+        Args:
+            tags: weights or kv_cache.
+        """
+        pass
+
+    async def release(self):
+        """Release weights and kv cache in GPU memory."""
+        if self.config.free_cache_engine:
+            self.inference_engine.free_cache_engine()
+
+    async def update_weights(self, weights, **kwargs):
+        """Update the weights of the rollout model.
+
+        Args:
+            weights: A generator that yields the name of the weight tensor and the tensor itself.
+        """
+        pass

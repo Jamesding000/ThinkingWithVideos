@@ -340,6 +340,17 @@ def pad_2d_list_to_length(response, pad_token_id, max_length=None):
     tensor = torch.tensor(padded_response)
     return tensor
 
+def pad_2d_list_to_length_return_mask(response, pad_token_id, max_length=None, device=None):
+    """
+    pad a 2D list (e.g. responses, logprobs) to a 2D tensor.
+    """
+    response_length = max(len(sub_list) for sub_list in response)
+    target_length = max_length if max_length is not None and max_length > response_length else response_length
+    padded_response = [tuple(sub_list) + (pad_token_id,) * (target_length - len(sub_list)) for sub_list in response]
+    padded_mask = [(1,) * len(sub_list) + (0,) * (target_length - len(sub_list)) for sub_list in response]
+    tensor = torch.tensor(padded_response, device=device)
+    mask = torch.tensor(padded_mask, dtype=torch.long, device=device)
+    return tensor, mask
 
 def pad_sequence_to_length(tensors, max_seq_len, pad_token_id, left_pad=False):
     """

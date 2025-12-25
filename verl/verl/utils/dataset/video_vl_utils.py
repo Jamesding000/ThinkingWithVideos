@@ -477,11 +477,13 @@ def fetch_video(ele: dict, image_factor: int = IMAGE_FACTOR, return_video_sample
             video_list = video_list[start_frame:end_frame+1]  # 注意end_frame是闭区间
             
         max_frames = process_info.pop("max_frames", None)
+        print(f"DEBUG fetch_video: max_frames={max_frames}, len(video_list)={len(video_list)}, fps={fps}")
         if max_frames is not None and len(video_list) > max_frames:
             origin_length = len(video_list)
             idxes = torch.linspace(0, len(video_list) - 1, max_frames).round().long().tolist()
             video_list = [video_list[i] for i in idxes]
             fps = len(video_list) / origin_length * fps
+            print(f"DEBUG fetch_video: Sampled from {origin_length} to {len(video_list)} frames, new fps={fps}")
         images = [
             fetch_image({"image": video_element, **process_info}, size_factor=image_factor)
             for video_element in video_list
@@ -491,8 +493,10 @@ def fetch_video(ele: dict, image_factor: int = IMAGE_FACTOR, return_video_sample
             images = apply_draw_number_images(images, fps, start_time=start_time)
 
         nframes = ceil_by_factor(len(images), FRAME_FACTOR)
+        print(f"DEBUG fetch_video: len(images) before padding={len(images)}, nframes after ceil_by_factor={nframes}, FRAME_FACTOR={FRAME_FACTOR}")
         if len(images) < nframes:
             images.extend([images[-1]] * (nframes - len(images)))
+            print(f"DEBUG fetch_video: Padded to {len(images)} images")
         if return_video_sample_fps:
             return images, fps
         return images

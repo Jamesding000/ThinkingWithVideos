@@ -477,8 +477,19 @@ class vLLMHttpServerBase:
         sampling_params.setdefault("repetition_penalty", self.config.get("repetition_penalty", 1.0))
         sampling_params = SamplingParams(max_tokens=max_tokens, **sampling_params)
         prompt_ids = _qwen2_5_vl_dedup_image_tokens(prompt_ids, self.model_config.processor)
+        
+        # Handle multi-modal data: support both dict format and list format (legacy)
+        multi_modal_data = None
+        if image_data is not None:
+            if isinstance(image_data, dict):
+                # New format: {"image": [...], "video": [...]}
+                multi_modal_data = image_data
+            else:
+                # Legacy format: just a list of images
+                multi_modal_data = {"image": image_data}
+        
         prompt = TokensPrompt(
-            prompt_token_ids=prompt_ids, multi_modal_data={"image": image_data} if image_data else None
+            prompt_token_ids=prompt_ids, multi_modal_data=multi_modal_data
         )
 
         # Add lora request

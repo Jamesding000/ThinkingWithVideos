@@ -143,6 +143,7 @@ if [ $DO_TRAIN -eq 1 ]; then
         actor_rollout_ref.rollout.multi_turn.enable=True \
         actor_rollout_ref.rollout.multi_turn.max_turns=$max_turns \
         actor_rollout_ref.rollout.multi_turn.tool_config_path=$tool_config_path \
+        actor_rollout_ref.rollout.agent.num_workers=4 \
         +actor_rollout_ref.rollout.repetition_penalty=1.05 \
         actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=$prob_ref_micro_batch_size_per_device \
         actor_rollout_ref.ref.fsdp_config.param_offload=True \

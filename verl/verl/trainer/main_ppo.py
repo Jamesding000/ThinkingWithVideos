@@ -250,6 +250,11 @@ class TaskRunner:
                 self.mapping[Role.RewardModel] = "reward_pool"
             else:
                 self.mapping[Role.RewardModel] = "global_pool"
+        else:
+            # When using reward loop with rule-based rewards, we still need RewardModel in mapping
+            # for RewardLoopManager to access the resource pool
+            if config.reward_model.get("use_reward_loop", False):
+                self.mapping[Role.RewardModel] = "global_pool"
 
     def add_ref_policy_worker(self, config, ref_policy_cls):
         """Add reference policy worker if KL loss or KL reward is used."""
@@ -369,7 +374,7 @@ class TaskRunner:
         )
         # Initialize the workers of the trainer.
         trainer.init_workers()
-
+        breakpoint()
         # Start the training process.
         trainer.fit()
 

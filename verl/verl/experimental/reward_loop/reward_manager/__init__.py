@@ -15,11 +15,13 @@
 from .registry import get_reward_manager_cls, register  # noqa: I001
 from .dapo import DAPORewardManager
 from .naive import NaiveRewardManager
+from .naive_multiturn import NaiveMultiturnRewardManager
 from .limited import RateLimitedRewardManager
 
 __all__ = [
     "DAPORewardManager",
     "NaiveRewardManager",
+    "NaiveMultiturnRewardManager",
     "RateLimitedRewardManager",
     "register",
     "get_reward_manager_cls",

@@ -231,7 +231,7 @@ def compute_advantage(
                 config.pf_ppo.get("reweight_method"),
                 config.pf_ppo.get("weight_pow"),
             )
-    elif adv_estimator == AdvantageEstimator.GRPO:
+    elif adv_estimator == AdvantageEstimator.GRPO or adv_estimator == AdvantageEstimator.DGRPO:
         # Initialize the mask for GRPO calculation
         grpo_calculation_mask = data.batch["response_mask"]
 
