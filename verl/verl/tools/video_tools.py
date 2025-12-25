@@ -87,12 +87,106 @@ class GetVideoClipFrameTool(BaseTool):
         self._instance_dict[instance_id] = {"response": "", "reward": 0.0}
         return instance_id
 
-    def _execute(self, instance_id: str, parameters: dict, video_name: str, video_base: str, duration: float, **kwargs):
+    def _load_frames_from_directory(self, video_path, start_time, end_time, duration, **kwargs):
+        """Load frames from pre-extracted frame directory for a given time range."""
+        from PIL import Image
+        from download_and_extract_frames import extract_youtube_id
+        
+        video_base = os.path.dirname(video_path)
+        video_name = os.path.basename(video_path)
+        
+        # Look for frame directory
+        video_frame_root = os.path.join(video_base, video_name.split(".")[0])
+        if not os.path.exists(video_frame_root):
+            video_frame_root = os.path.join(video_base, extract_youtube_id(video_name.split(".")[0]))
+        
+        if not os.path.exists(video_frame_root):
+            return None  # Frame directory not found, caller should try raw video
+        
+        # Load all frames
+        frame_files = sorted(
+            [f for f in os.listdir(video_frame_root) if f.endswith(('.jpg', '.jpeg', '.png'))],
+            key=lambda x: int(x.split("_")[-1].split(".")[0])
+        )
+        frame_paths = [os.path.join(video_frame_root, f) for f in frame_files]
+        
+        # Calculate which frames correspond to the time range
+        total_frames = len(frame_paths)
+        clip_fps = total_frames / duration if duration > 0 else 2.0
+        
+        start_frame_idx = int(start_time * clip_fps)
+        end_frame_idx = int(end_time * clip_fps)
+        
+        # Clip to valid range
+        start_frame_idx = max(0, start_frame_idx)
+        end_frame_idx = min(total_frames, end_frame_idx)
+        
+        # Extract frames for this segment
+        selected_frame_paths = frame_paths[start_frame_idx:end_frame_idx]
+        
+        if len(selected_frame_paths) == 0:
+            raise ValueError(f"No frames found for time range {start_time}-{end_time}")
+        
+        # Load frames as PIL Images
+        frames = [Image.open(fp).convert("RGB") for fp in selected_frame_paths]
+        
+        return {
+            "frames": frames,
+            "frame_paths": selected_frame_paths,
+            "fps": clip_fps,
+        }
+
+    def _execute(self, instance_id: str, parameters: dict, **kwargs):
         try:
+            # Parse parameters
+            video_path = kwargs.get("video_path")
+            duration = kwargs.get("duration")
+            if video_path is None or duration is None:
+                raise ValueError("video_path and duration are required in kwargs")
+            
             start_time = float(parameters.get("start_time"))
             end_time = float(parameters.get("end_time"))
+            max_frames = kwargs.get("max_frames", 64)
+            fps = kwargs.get("fps", 2.0)
+            draw_number = kwargs.get("draw_number", True)
+            parallel = kwargs.get("parallel", True)
+            
+            # Try loading from pre-extracted frame directory first
+            frame_data = self._load_frames_from_directory(
+                video_path, start_time, end_time, duration, **kwargs
+            )
+            
+            if frame_data is not None:
+                # Successfully loaded from frame directory
+                frames = frame_data["frames"]
+                selected_frame_paths = frame_data["frame_paths"]
+                clip_fps = frame_data["fps"]
+                
+                # Build the video element for vLLM
+                ele = {
+                    "type": "video",
+                    "video": selected_frame_paths,
+                    "max_pixels": kwargs.get("max_pixels", 224*224),
+                    "max_frames": max_frames,
+                    "fps": fps,
+                    "draw_number": draw_number,
+                    "parallel": parallel,
+                }
+                
+                return_content = {
+                    "ele": ele,
+                    "video": frames,
+                    "fps": fps,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                }
+                return {"type": "result", "content": return_content}, 0.0, {}
+            
+            # Fallback: Load from raw video file (original functionality)
+            video_base = os.path.dirname(video_path)
+            video_name = os.path.basename(video_path)
             image_messages = video_clip_to_image_messages(
-                video_name, video_base, start_time, end_time, duration, max_frames=kwargs.get("max_frames", 64)
+                video_name, video_base, start_time, end_time, duration, max_frames=max_frames
             )
             return_content = {
                 "image_messages": image_messages,
@@ -100,11 +194,12 @@ class GetVideoClipFrameTool(BaseTool):
                 "end_time": end_time,
             }
             return {"type": "result", "content": return_content}, 0.0, {}
+            
         except Exception as e:
             return {"type": "error", "content": f"Error: {self.name} tool execution failed: {e}"}, 0.0, {"error": str(e)}
 
-    async def execute(self, instance_id: str, parameters: dict, video_name: str, video_base: str, duration: float, **kwargs):
-        return self._execute(instance_id, parameters, video_name, video_base, duration, **kwargs)
+    async def execute(self, instance_id: str, parameters: dict, **kwargs):
+        return self._execute(instance_id, parameters, **kwargs)
 
     async def calc_reward(self, instance_id: str, **kwargs) -> str:
         return self._instance_dict[instance_id]["reward"]

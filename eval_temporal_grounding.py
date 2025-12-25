@@ -26,18 +26,19 @@ import logging
 
 def get_dataset_info(dataset):
     dataset_list = [
-        {'dataset_name': 'charades_sta', 'frame_dir': 'data/charades/video_14400frames_fps2', 'data_file': 'data/charades/test_set.json'},
-        {'dataset_name': 'charades_sta_src', 'frame_dir': 'data/charades/video_14400frames_fps2', 'data_file': 'data/charades/test_set_src.json'},
-        {'dataset_name': 'charades_sta_train', 'frame_dir': 'data/charades/video_14400frames_fps2', 'data_file': 'data/charades/train_set_grpo_src.json'},
-        {'dataset_name': 'actnet_tg', 'frame_dir': 'data/actnet/video_14400frames_fps2', 'data_file': 'data/actnet/test_set_grpo_new.json'},
-        {'dataset_name': 'actnet_tg_src', 'frame_dir': 'data/actnet/video_14400frames_fps2', 'data_file': 'data/actnet/test_set_grpo_new_src.json'},
-        {'dataset_name': 'actnet_tg_full', 'frame_dir': 'data/actnet/video_14400frames_fps2', 'data_file': 'data/actnet/test_set_grpo_valid_new.json'},
-        {'dataset_name': 'actnet_tg_train', 'frame_dir': 'data/actnet/video_14400frames_fps2', 'data_file': 'data/actnet/train_set_grpo_new_12k_src.json'},
-        {'dataset_name': 'tvg_bench', 'frame_dir': 'data/TimeR1-Dataset/tvgbench_data_cutted', 'data_file': 'data/TimeR1-Dataset/test_set_grpo.json'},
-        {'dataset_name': 'video_r1_01_video_train', 'frame_dir': 'data/Video-R1-data/video_14400frames_fps2', 'data_file': 'data/Video-R1-data/train_set_grpo_01_src_exist_video.json'},
-        {'dataset_name': 'video_r1_01_image_train', 'frame_dir': 'data/Video-R1-data', 'data_file': 'data/Video-R1-data/train_set_grpo_01_src_exist_image.json'},
-        {'dataset_name': 'vidchapter', 'frame_dir': 'data/vidchapters/video_14400frames_fps2', 'data_file': 'data/vidchapters/test_set_grpo.json'},
-        {'dataset_name': 'vidchapter_src', 'frame_dir': 'data/vidchapters/video_14400frames_fps2', 'data_file': 'data/vidchapters/test_set_grpo_src.json'},
+        # {'dataset_name': 'charades_sta', 'frame_dir': 'data/charades/video_14400frames_fps2', 'data_file': 'data/charades/test_set.json'},
+        # {'dataset_name': 'charades_sta_src', 'frame_dir': 'data/charades/video_14400frames_fps2', 'data_file': 'data/charades/test_set_src.json'},
+        # {'dataset_name': 'charades_sta_train', 'frame_dir': 'data/charades/video_14400frames_fps2', 'data_file': 'data/charades/train_set_grpo_src.json'},
+        {'dataset_name': 'actnet', 'frame_dir': '/data/user_data/jamesdin/data/actnet/video_14400frames_fps2', 'data_file': '/data/user_data/jamesdin/data/actnet/actnet_val_1.json'},
+        # {'dataset_name': 'actnet_tg', 'frame_dir': '/data/actnet/video_14400frames_fps2', 'data_file': 'data/actnet/test_set_grpo_new.json'},
+        # {'dataset_name': 'actnet_tg_src', 'frame_dir': 'data/actnet/video_14400frames_fps2', 'data_file': 'data/actnet/test_set_grpo_new_src.json'},
+        # {'dataset_name': 'actnet_tg_full', 'frame_dir': 'data/actnet/video_14400frames_fps2', 'data_file': 'data/actnet/test_set_grpo_valid_new.json'},
+        # {'dataset_name': 'actnet_tg_train', 'frame_dir': 'data/actnet/video_14400frames_fps2', 'data_file': 'data/actnet/train_set_grpo_new_12k_src.json'},
+        # {'dataset_name': 'tvg_bench', 'frame_dir': 'data/TimeR1-Dataset/tvgbench_data_cutted', 'data_file': 'data/TimeR1-Dataset/test_set_grpo.json'},
+        # {'dataset_name': 'video_r1_01_video_train', 'frame_dir': 'data/Video-R1-data/video_14400frames_fps2', 'data_file': 'data/Video-R1-data/train_set_grpo_01_src_exist_video.json'},
+        # {'dataset_name': 'video_r1_01_image_train', 'frame_dir': 'data/Video-R1-data', 'data_file': 'data/Video-R1-data/train_set_grpo_01_src_exist_image.json'},
+        # {'dataset_name': 'vidchapter', 'frame_dir': 'data/vidchapters/video_14400frames_fps2', 'data_file': 'data/vidchapters/test_set_grpo.json'},
+        # {'dataset_name': 'vidchapter_src', 'frame_dir': 'data/vidchapters/video_14400frames_fps2', 'data_file': 'data/vidchapters/test_set_grpo_src.json'},
     ]
     for d in dataset_list:
         if d['dataset_name'] == dataset:
@@ -217,6 +218,14 @@ def extract_time_range_old2(paragraph):
     return -1, -1
 
 def extract_time_range(paragraph: str) -> list:
+    # # First, extract content from <answer> tags if present (handles XML-tagged responses)
+    # answer_match = re.search(r"<answer>(.*?)</answer>", paragraph, re.DOTALL)
+    # if answer_match:
+    #     paragraph = answer_match.group(1).strip()
+    
+    # # Also remove <think> tags if present
+    # paragraph = re.sub(r"<think>.*?</think>", "", paragraph, flags=re.DOTALL).strip()
+    
     candidates = re.split(r"[!?\n]", paragraph)
     # 1. try get every pair in each line
     timestamps = []
@@ -455,6 +464,8 @@ if __name__ == "__main__":
         exit(0)
     print(f'[main] Execute {args.dataset} evaluation')
     out_dir, gt_file = launch_multi_gpu_eval(args, **info, evaluation_name=args.evaluation_name)
+    # out_dir = "/data/user_data/jamesdin/outputs/eval/qwen3_vl_2b_thinking_step41_hf/evaluation_maxpix384*384_maxfrm256_number/actnet"
+    # gt_file = "/data/user_data/jamesdin/data/actnet/actnet_val_1.json"
     print(f'[main] Execute {args.dataset} evaluation')
     calc_eval_result(out_dir, gt_file, args.num_chunks, info['data_file'])
 

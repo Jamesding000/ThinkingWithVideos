@@ -36,6 +36,43 @@ logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
+def _find_and_load_frame_paths(video_path: str) -> list[str]:
+    """Helper function to find and load frame paths with YouTube ID fallback.
+    
+    Args:
+        video_path: Path to video file (e.g., /path/to/v_xyz.mp4)
+        
+    Returns:
+        List of sorted frame paths
+        
+    Raises:
+        ValueError: If frame directory not found
+    """
+    from download_and_extract_frames import extract_youtube_id
+    
+    video_base = os.path.dirname(video_path)
+    video_name = os.path.basename(video_path)
+    
+    # First try: strip file extension
+    video_frame_path = os.path.join(video_base, video_name.split('.')[0])
+    print(f"  [Tool] Looking for frame directory: {video_frame_path}")
+    
+    if not os.path.exists(video_frame_path):
+        # Second try: extract YouTube ID (removes v_ prefix, etc.)
+        youtube_id = extract_youtube_id(video_name.split('.')[0])
+        video_frame_path = os.path.join(video_base, youtube_id)
+        print(f"  [Tool] Directory not found, trying YouTube ID: {video_frame_path}")
+    
+    if os.path.exists(video_frame_path):
+        frame_paths = os.listdir(video_frame_path)
+        frame_paths = sorted(frame_paths, key=lambda x: int(x.split("_")[-1].split(".")[0]))
+        frame_paths = [os.path.join(video_frame_path, frame_path) for frame_path in frame_paths]
+        # print(f"  [Tool] ✓ Found {len(frame_paths)} frames in directory")
+        return frame_paths
+    else:
+        raise ValueError(f"[error] video frame path {video_frame_path} not exists")
+
+
 class GetVideoClipFrameTool(BaseTool):
     """Zoom tool for video temporal zoom-in
 
@@ -107,16 +144,12 @@ class GetVideoClipFrameTool(BaseTool):
             assert end_time <= duration, f"[error] end: {end_time} should be less than video duration: {duration}"
             assert end_time - start_time > 1.0, f"[error] end - start: {end_time} - {start_time} should be greater than 1.0"
             
-            video_frame_path = video_path.split('.')[0]
+            # Use helper function to find frame directory with YouTube ID fallback
+            frame_paths = _find_and_load_frame_paths(video_path)
+            total_frames = len(frame_paths)
+            video_path = frame_paths
             fps = 2.0
-            if os.path.exists(video_frame_path):
-                frame_paths = os.listdir(video_frame_path)
-                frame_paths = sorted(frame_paths, key=lambda x: int(x.split("_")[-1].split(".")[0]))
-                frame_paths = [os.path.join(video_frame_path, frame_path) for frame_path in frame_paths]
-                total_frames = len(frame_paths)
-                video_path = frame_paths
-            else:
-                raise ValueError(f"[error] video frame path {video_frame_path} not exists")
+            
             ele = {
                 "type": "video",
                 "video": video_path,
@@ -183,16 +216,13 @@ class GetVideoClipCaptionTool(GetVideoClipFrameTool):
             assert start_time >= 0, f"[error] start: {start_time} should be greater than 0"
             assert end_time <= duration, f"[error] end: {end_time} should be less than video duration: {duration}"
             assert end_time - start_time > 1.0, f"[error] end - start: {end_time} - {start_time} should be greater than 1.0"
-            video_frame_path = video_path.split('.')[0]
+            
+            # Use helper function to find frame directory with YouTube ID fallback
+            frame_paths = _find_and_load_frame_paths(video_path)
+            total_frames = len(frame_paths)
+            video_path = frame_paths
             fps = 2.0
-            if os.path.exists(video_frame_path):
-                frame_paths = os.listdir(video_frame_path)
-                frame_paths = sorted(frame_paths, key=lambda x: int(x.split("_")[-1].split(".")[0]))
-                frame_paths = [os.path.join(video_frame_path, frame_path) for frame_path in frame_paths]
-                total_frames = len(frame_paths)
-                video_path = frame_paths
-            else:
-                raise ValueError(f"[error] video frame path {video_frame_path} not exists")
+            
             ele = {
                 "type": "video",
                 "video": video_path,
@@ -249,16 +279,13 @@ class AskVideoClipQuestionTool(GetVideoClipFrameTool):
             assert start_time >= 0, f"[error] start: {start_time} should be greater than 0"
             assert end_time <= duration, f"[error] end: {end_time} should be less than video duration: {duration}"
             assert end_time - start_time > 1.0, f"[error] end - start: {end_time} - {start_time} should be greater than 1.0"
-            video_frame_path = video_path.split('.')[0]
+            
+            # Use helper function to find frame directory with YouTube ID fallback
+            frame_paths = _find_and_load_frame_paths(video_path)
+            total_frames = len(frame_paths)
+            video_path = frame_paths
             fps = 2.0
-            if os.path.exists(video_frame_path):
-                frame_paths = os.listdir(video_frame_path)
-                frame_paths = sorted(frame_paths, key=lambda x: int(x.split("_")[-1].split(".")[0]))
-                frame_paths = [os.path.join(video_frame_path, frame_path) for frame_path in frame_paths]
-                total_frames = len(frame_paths)
-                video_path = frame_paths
-            else:
-                raise ValueError(f"[error] video frame path {video_frame_path} not exists")
+            
             ele = {
                 "type": "video",
                 "video": video_path,

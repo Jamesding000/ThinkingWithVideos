@@ -319,6 +319,8 @@ if __name__ == "__main__":
         exit(0)
     print(f'[main] Execute {args.dataset} evaluation')
     out_dir, gt_file = launch_multi_gpu_eval(args, **info, evaluation_name=args.evaluation_name)
+    # out_dir = "/data/user_data/jamesdin/outputs/eval/qwen3_vl_2b_thinking_step41_hf/evaluation_maxpix384*384_maxfrm256_number/vsibench"
+    # gt_file = "/data/user_data/jamesdin/data/vsibench/test_set_grpo.json"
     print(f'[main] Execute {args.dataset} evaluation')
     calc_eval_result(out_dir, gt_file, args.num_chunks, info['data_file'])
 

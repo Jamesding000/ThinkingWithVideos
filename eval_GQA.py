@@ -28,9 +28,10 @@ import ast
 
 def get_dataset_info(dataset):
     dataset_list = [
-        {'dataset_name': 'next_gqa', 'frame_dir': 'data/nextgqa/video_14400frames_fps2', 'data_file': 'data/nextgqa/test_set_grpo_src.json'},  # gqa task
-        {'dataset_name': 'rextime', 'frame_dir': 'data/rextime/video_14400frames_fps2', 'data_file': 'data/rextime/test_set_grpo_exist_src.json'},  # gqa task
-        {'dataset_name': 'rextime_val', 'frame_dir': 'data/rextime/video_14400frames_fps2', 'data_file': 'data/rextime/val_set_grpo_exist_src.json'},  # gqa task
+        # {'dataset_name': 'next_gqa', 'frame_dir': 'data/nextgqa/raw_videos ', 'data_file': 'data/nextgqa/test_set_grpo_src.json'},  # gqa task
+        # {'dataset_name': 'rextime', 'frame_dir': 'data/rextime/video_14400frames_fps2', 'data_file': 'data/rextime/test_set_grpo_exist_src.json'},  # gqa task
+        {'dataset_name': 'rextime_val', 'frame_dir': '/data/user_data/jamesdin/data/rextime/video_14400frames_fps2', 'data_file': '/data/user_data/jamesdin/data/rextime/rextime_validation.json'},  # gqa task
+        {'dataset_name': 'rextime_test', 'frame_dir': '/data/user_data/jamesdin/data/rextime/video_14400frames_fps2', 'data_file': '/data/user_data/jamesdin/data/rextime/rextime_test.json'},  # gqa task
     ]
     for d in dataset_list:
         if d['dataset_name'] == dataset:
@@ -336,6 +337,8 @@ if __name__ == "__main__":
         exit(0)
     print(f'[main] Execute {args.dataset} evaluation')
     out_dir, gt_file = launch_multi_gpu_eval(args, **info, evaluation_name=args.evaluation_name)
+    # out_dir = "/data/user_data/jamesdin/outputs//global_step_100/evaluation_maxpix384*384_number/rextime_val"
+    # gt_file = "/data/user_data/jamesdin/data/rextime/rextime_validation.json"
     print(f'[main] Execute {args.dataset} evaluation')
     calc_eval_result(out_dir, gt_file, args.num_chunks, info['data_file'])
 
