@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euxo pipefail
 
+########################################################
+# can directly run this command to create the env
+# conda env create -f verl_environment.yml
+########################################################
+
 # === 0. Init conda ===
 # Adjust this path if your miniconda is elsewhere.
 source "$HOME/miniconda3/etc/profile.d/conda.sh"
@@ -86,7 +91,7 @@ pip install opencv-python opencv-fixer
 # === 6. Extra basics: plotting / notebooks / analysis ===
 pip install \
   decord \
-  rouge_score \
+  rouge-score \
   matplotlib \
   seaborn \
   scipy \
