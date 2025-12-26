@@ -38,7 +38,7 @@ fi
 
 # model arch
 # export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/models/Qwen2.5-VL-3B-Instruct
-export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/outputs/sft/qwen2.5_vl_3b_instruct_thinking_tool_lr1e_5_4g_sft_data_mtvr_cot_tool_bs128/global_step_82
+export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/outputs/sft_tool/qwen2.5_vl_3b_instruct_thinking_tool_lr1e_5_4g_sft_data_mtvr_cot_tool_bs128/global_step_137
 export model_path=${STAGE_1_PRETRAINED_CKPT}
 export max_turns=2
 export tool_config_path=verl/verl/tools/config/zoom_tool_config_new.yaml
@@ -101,6 +101,9 @@ export RAY_DEDUP_LOGS=0
 # Recommended: 50 (each reset takes ~10-20 seconds but prevents OOM)
 export VERL_VLLM_RESET_INTERVAL=5
 export VLLM_MM_INPUT_CACHE_GIB=0
+
+# Set CUDA visibility to prevent Ray worker initialization errors
+export CUDA_VISIBLE_DEVICES=0,1
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=dgrpo \
