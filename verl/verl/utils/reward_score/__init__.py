@@ -87,13 +87,13 @@ def default_compute_score(data_source, solution_str, ground_truth, extra_info=No
             res = charades_cutreward.compute_score(solution_str, ground_truth, extra_info)
         else:
             res = charades_cutreward.compute_score(solution_str, ground_truth)
-    elif data_source in ['./data/vidchapter_cutreward']:  # TG task
+    elif data_source in ['./data/vidchapter_cutreward', './data/vidchapter']:  # TG task
         from . import vidchapter_cutreward
         if extra_info is not None:
             res = vidchapter_cutreward.compute_score(solution_str, ground_truth, extra_info)
         else:
             res = vidchapter_cutreward.compute_score(solution_str, ground_truth)
-    elif data_source in ["video_r1/multiple_choice", "video_r1/numerical", "video_r1/free_form", "video_r1/regression", "video_r1/OCR"]:
+    elif data_source in ["./data/video_r1/multiple_choice", "./data/video_r1/numerical", "./data/video_r1/free_form", "./data/video_r1/regression", "./data/video_r1/OCR"]:
         from . import video_r1
         res = video_r1.compute_score(solution_str, ground_truth, extra_info, problem_type=data_source.split('/')[-1])
     elif data_source in ["./data/rextime", "./data/nextgqa"]:

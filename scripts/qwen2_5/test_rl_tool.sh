@@ -102,9 +102,6 @@ export RAY_DEDUP_LOGS=0
 export VERL_VLLM_RESET_INTERVAL=5
 export VLLM_MM_INPUT_CACHE_GIB=0
 
-# Set CUDA visibility to prevent Ray worker initialization errors
-export CUDA_VISIBLE_DEVICES=0,1
-
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=dgrpo \
     data.train_files=$dataset_json_path \
@@ -183,3 +180,4 @@ python3 -m verl.trainer.main_ppo \
     trainer.val_before_train=False \
     trainer.balance_batch=True \
     ray_init.num_cpus=$n_cpus \
+    +ray_init.num_gpus=$n_gpus_per_node \

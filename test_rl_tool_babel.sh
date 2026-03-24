@@ -36,7 +36,7 @@ fi
 
 # model arch
 # export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/models/Qwen3-VL-2B-Thinking
-export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/outputs/sft_tool/qwen3_vl_2b_thinking_thinking_lr1e_5_4g_sft_data_mtvr_cot_tool_bs128/global_step_137
+export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/outputs/sft/qwen3_vl_2b_thinking_thinking_lr1e_5_4g_sft_data_mtvr_cot_bs128/global_step_41
 export model_path=${STAGE_1_PRETRAINED_CKPT}
 export max_turns=2
 export tool_config_path=verl/verl/tools/config/zoom_tool_config_new.yaml
@@ -60,7 +60,7 @@ export max_prompt_length=4096
 export max_response_length=7168
 export single_turn_response_length=1024
 # name
-export project_name=rl_tool
+export project_name=sft_then_grpo_then_sft_then_grpo
 export exp_suffix=thinking_lr1e_6
 
 # auto config
@@ -177,4 +177,6 @@ python3 -m verl.trainer.main_ppo \
     trainer.validation_data_dir=$SAVE_PATH/evaluations \
     trainer.val_before_train=False \
     trainer.balance_batch=True \
+    trainer.nnodes=$nnodes \
+    trainer.n_gpus_per_node=$n_gpus_per_node \
     ray_init.num_cpus=$n_cpus \

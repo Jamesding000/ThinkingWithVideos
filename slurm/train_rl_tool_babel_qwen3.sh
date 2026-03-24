@@ -1,3 +1,49 @@
+#!/usr/bin/bash
+#SBATCH --job-name=verl-rl-tool-qwen3-bs8
+#SBATCH --partition=general          # same partition
+#SBATCH --time=47:00:00              # <= 48h limit on general
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1        # one launcher process; verl will spawn GPU workers itself, per node: 8 GPUs
+#SBATCH --gres=gpu:A6000:8         # 8 × A6000 node have 1.25T memory available
+#SBATCH --cpus-per-task=8          # per node: 64 CPUs
+#SBATCH --mem=1250G                # keep max CPU memory for general
+#SBATCH --output=/home/jamesdin/logs/verl-rl-tool-qwen3-%j.out
+#SBATCH --error=/home/jamesdin/logs/verl-rl-tool-qwen3-%j.err
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=jamesdin@andrew.cmu.edu
+
+SCRATCH_BASE=/scratch/$USER
+export TMPDIR=${SCRATCH_BASE}/job_${SLURM_JOB_ID}
+
+mkdir -p "${TMPDIR}"
+
+# Ray will put sessions/logs here instead of /tmp
+export RAY_TEMP_DIR="${TMPDIR}/ray"
+mkdir -p "${RAY_TEMP_DIR}"
+
+echo "Using TMPDIR=${TMPDIR}"
+echo "Using RAY_TEMP_DIR=${RAY_TEMP_DIR}"
+echo "==== Job started on $(hostname) at $(date) ===="
+
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate verl
+
+mkdir -p /home/jamesdin/logs
+export PYTHONUNBUFFERED=1
+
+export NCCL_DEBUG=WARN
+export NCCL_IB_DISABLE=1
+export NCCL_P2P_DISABLE=1
+
+export nnodes=${SLURM_NNODES:-1}
+export n_gpus_per_node=${SLURM_GPUS_ON_NODE:-8}
+export n_cpus=$(( ${SLURM_CPUS_PER_TASK:-8} * n_gpus_per_node * nnodes ))  # 64
+
+echo "SLURM_NNODES=$SLURM_NNODES"
+echo "SLURM_GPUS_ON_NODE=$SLURM_GPUS_ON_NODE"
+export WORLD_SIZE=$((nnodes * n_gpus_per_node))
+
+######## Run Training Script #######
 set -x
 
 export DO_TRAIN=1
@@ -41,14 +87,14 @@ export model_path=${STAGE_1_PRETRAINED_CKPT}
 export max_turns=2
 export tool_config_path=verl/verl/tools/config/zoom_tool_config_new.yaml
 # training
-export n_gpus_per_node=8
-export n_cpus=64
-export nnodes=1
+# export n_gpus_per_node=8
+# export n_cpus=128
+# export nnodes=2
 export group_size=4  # 8, 16
 export rollout_batch_size=8  # train_batch_size, TODO: 8 previously lead to OOM
 export update_batch_size=8  # ppo_mini_batch_size, can use the same as train_batch_size
 export ppo_micro_batch_size_per_device=2  # divisor of group_size * update_batch_size / n_gpus_per_node
-export prob_ref_micro_batch_size_per_device=2  # divisor of group_size * update_batch_size / n_gpus_per_node
+export prob_ref_micro_batch_size_per_device=4  # divisor of group_size * update_batch_size / n_gpus_per_node
 export dataloader_num_workers=16  # 16
 # reward
 export reward_list=[format,iou] ########### set to only iou reward
@@ -97,8 +143,8 @@ export RAY_DEDUP_LOGS=0
 # 🔥 vLLM 0.11.0 Memory Leak Workaround
 # Reset vLLM engine every N steps to free accumulated KV cache memory
 # Recommended: 50 (each reset takes ~10-20 seconds but prevents OOM)
-export VERL_VLLM_RESET_INTERVAL=15
-export VLLM_MM_INPUT_CACHE_GIB=4
+# export VERL_VLLM_RESET_INTERVAL=15
+# export VLLM_MM_INPUT_CACHE_GIB=4
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=dgrpo \

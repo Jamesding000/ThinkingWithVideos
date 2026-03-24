@@ -3,8 +3,8 @@
 #SBATCH --partition=general          # Use the general partition
 #SBATCH --time=47:00:00              # <= 48h limit on general
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=8          # 1 task per GPU → 8 GPUs total
-#SBATCH --gres=gpu:L40S:8            # request 8 × L40S GPUs
+#SBATCH --ntasks-per-node=4          # 1 task per GPU → 8 GPUs total
+#SBATCH --gres=gpu:L40S:4            # request 8 × L40S GPUs
 #SBATCH --cpus-per-task=8            # 8 * 8 = 64 CPUs total
 #SBATCH --mem=360GB                  # Adjust as needed, safe for 8 GPUs
 #SBATCH --output=/home/jamesdin/logs/verl-sft-qwen3-%j.out
@@ -46,7 +46,7 @@ export NCCL_P2P_DISABLE=1
 
 # Let Slurm drive world size
 export nnodes=${SLURM_NNODES:-1}
-export n_gpus_per_node=${SLURM_GPUS_ON_NODE:-8}
+export n_gpus_per_node=${SLURM_GPUS_ON_NODE:-4}
 export WORLD_SIZE=$(( nnodes * n_gpus_per_node ))
 
 echo "SLURM_NNODES=$SLURM_NNODES"

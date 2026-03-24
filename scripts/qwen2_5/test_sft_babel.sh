@@ -21,7 +21,7 @@ User Question:
 
 # training
 export nnodes=1
-export n_gpus_per_node=8
+export n_gpus_per_node=4
 export batch_size=128
 export micro_batch_size_per_gpu=1
 # data
@@ -101,9 +101,9 @@ torchrun \
     trainer.project_name=$project_name \
     trainer.experiment_name=$EXP_NAME \
     trainer.logger=['console','wandb'] \
-    trainer.save_freq=41 \
+    trainer.save_freq=50 \
     trainer.test_freq=0 \
-    trainer.total_epochs=3 \
+    trainer.total_epochs=1 \
     trainer.total_training_steps=null \
     trainer.nnodes=$nnodes \
     trainer.n_gpus_per_node=$n_gpus_per_node \

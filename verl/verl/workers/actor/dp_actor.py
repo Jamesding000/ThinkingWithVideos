@@ -262,7 +262,7 @@ class DataParallelPPOActor(BasePPOActor):
             self.actor_optimizer.step()
         return grad_norm
 
-    @GPUMemoryLogger(role="dp actor", logger=logger)
+    @GPUMemoryLogger(role="dp actor", logger=logger, level=logging.INFO)
     def compute_log_prob(self, data: DataProto, calculate_entropy=False) -> torch.Tensor:
         """Compute the log probability of the responses given input_ids, attention_mask and position_ids
 
@@ -281,6 +281,8 @@ class DataParallelPPOActor(BasePPOActor):
         Returns:
             torch.Tensor: the log_prob tensor
         """
+        self.log_memory("Before compute_log_prob")
+        
         # set to eval
         self.actor_module.eval()
 
@@ -328,8 +330,11 @@ class DataParallelPPOActor(BasePPOActor):
 
         return log_probs, entropys
 
-    @GPUMemoryLogger(role="dp actor", logger=logger)
+    @GPUMemoryLogger(role="dp actor", logger=logger, level=logging.INFO)
     def update_policy(self, data: DataProto):
+        
+        self.log_memory("Before update_policy")
+
         # make sure we are in training mode
         self.actor_module.train()
 
@@ -452,3 +457,27 @@ class DataParallelPPOActor(BasePPOActor):
                 append_to_dict(metrics, data)
         self.actor_optimizer.zero_grad()
         return metrics
+
+    def log_memory(self, prefix: str = ""):
+        import psutil
+        import gc
+
+        p = psutil.Process(os.getpid())
+        mem_info = p.memory_info()
+        rss_gb = mem_info.rss / (1024**3)
+        vms_gb = mem_info.vms / (1024**3)
+
+        # Get GPU memory if available
+        gpu_mem_str = ""
+        if torch.cuda.is_available():
+            gpu_allocated = torch.cuda.memory_allocated() / (1024**3)
+            gpu_reserved = torch.cuda.memory_reserved() / (1024**3)
+            gpu_mem_str = f" | GPU: {gpu_allocated:.3f}/{gpu_reserved:.3f} GB"
+
+        # Get garbage collection stats
+        gc_counts = gc.get_count()
+
+        msg = f"🔍 [{prefix}] PID={os.getpid()} | CPU RSS={rss_gb:.3f} GB, VMS={vms_gb:.3f} GB{gpu_mem_str} | GC={gc_counts}"
+        print(msg, flush=True)
+        logger.info(msg)
+

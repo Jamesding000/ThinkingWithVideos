@@ -21,20 +21,18 @@ User Question:
 
 # training
 export nnodes=1
-export n_gpus_per_node=4
+export n_gpus_per_node=8
 export batch_size=128
 export micro_batch_size_per_gpu=1
 # data
-export dataset=data_mtvr_cot_tool
+export dataset=data_mtvr_cot
 # model
-export max_turns=0
-export tool_config_path=verl/verl/tools/config/zoom_tool_config_new.yaml
 # export model_path=models/Qwen2.5-VL-7B-Instruct
 export model_path=/data/user_data/jamesdin/models/Qwen3-VL-2B-Thinking
 # export dataset_json_path=[data/charades/train_set_sft_new_10k6_src_diff.json,data/actnet/train_set_sft_new_9k5_src_diff.json,data/vidchapters/train_set_sft_diff_exist_4k3.json,data/nextgqa/train_set_sft_src_diff_3k.json,data/rextime/train_set_sft_exist_src_diff_3k7.json,data/Video-R1-data/train_set_sft_005_video.json,data/Video-R1-data/train_set_sft_005_image.json,data/longvideo-reason/train_set_sft_src_exist_8k.json]
 # export dataset_json_path=[data/MultiTaskVideoReasoning/MTVR_CoT/actnet.json,data/MultiTaskVideoReasoning/MTVR_CoT/charades.json,data/MultiTaskVideoReasoning/MTVR_CoT/vidchapters.json,data/MultiTaskVideoReasoning/MTVR_CoT/nextgqa.json,data/MultiTaskVideoReasoning/MTVR_CoT/rextime.json,data/MultiTaskVideoReasoning/MTVR_CoT/longvideo-reason.json,data/MultiTaskVideoReasoning/MTVR_CoT/Video-R1-data-image.json,data/MultiTaskVideoReasoning/MTVR_CoT/Video-R1-data-video.json]
 # export dataset_json_path=[data/MultiTaskVideoReasoning/MTVR_CoT/charades.json,data/MultiTaskVideoReasoning/MTVR_CoT/nextgqa.json]
-export dataset_json_path=[data/MultiTaskVideoReasoning/MTVR_Tool_CoT/longvideo-reason.json,data/MultiTaskVideoReasoning/MTVR_Tool_CoT/vidchapters.json]
+export dataset_json_path=[data/MultiTaskVideoReasoning/MTVR_Tool_CoT/longvideo-reason_sampled_30pct.json,data/MultiTaskVideoReasoning/MTVR_Tool_CoT/vidchapters_sampled_30pct.json]
 export dataset_json_path_val=[]
 # export dataset_video_base=[data/charades/video_14400frames_fps2,data/actnet/video_14400frames_fps2,data/vidchapters/video_14400frames_fps2,data/nextgqa/video_14400frames_fps2,data/rextime/video_14400frames_fps2,data/Video-R1-data/video_14400frames_fps2,data/Video-R1-data,data/longvideo-reason/train_video_14400frames_fps2]
 # export dataset_video_base=[/data/user_data/jamesdin/data/charades/video_14400frames_fps2,/data/user_data/jamesdin/data/nextqa/video_14400frames_fps2]
@@ -42,7 +40,7 @@ export dataset_video_base=[/data/user_data/jamesdin/data/longvideo-reason/video_
 
 export max_prompt_length=10240  # 10240
 # name
-export project_name=sft_tool
+export project_name=sft
 export exp_suffix=thinking_lr1e_5
 
 # auto config
@@ -100,9 +98,9 @@ torchrun \
     trainer.project_name=$project_name \
     trainer.experiment_name=$EXP_NAME \
     trainer.logger=['console','wandb'] \
-    trainer.save_freq=50 \
+    trainer.save_freq=41 \
     trainer.test_freq=0 \
-    trainer.total_epochs=1 \
+    trainer.total_epochs=3 \
     trainer.total_training_steps=null \
     trainer.nnodes=$nnodes \
     trainer.n_gpus_per_node=$n_gpus_per_node \

@@ -325,9 +325,15 @@ For each function call, return a json object with function name and arguments wi
         """
         A Wrapper function to handle exceptions from getitem().
         """
-        res = self.getitem(item)
+        while True:
+            try:
+                res = self.getitem(item)
+                return res
+            except Exception as e:
+                print(f"error item {item}: {e}, try another")
+                item = random.randint(0, len(self.dataframe) - 1)
         return res
-        
+
     def getitem(self, item):
         """
         Note that we also return the raw_input_ids so that it can be combined with other chat template

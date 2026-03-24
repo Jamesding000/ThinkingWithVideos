@@ -700,6 +700,15 @@ class RayPPOTrainer:
             with open(filename, "w") as f:
                 json.dump(metric_dict, f, indent=4)
 
+        # prevent memory leakage
+        # del data_source_lst
+        # del sample_inputs
+        # del sample_outputs  
+        # del sample_scores
+        # del reward_extra_infos_dict
+        # import gc
+        # gc.collect()
+
         return metric_dict
 
     def init_workers(self):
@@ -740,8 +749,10 @@ class RayPPOTrainer:
         # create a reward model if reward_fn is None
         if self.use_rm:
             # we create a RM here
+            # TODO: here the reward model worker got created
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.RewardModel)
             rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.RewardModel], config=self.config.reward_model)
+            print(f"### rm_cls: {rm_cls}")
             self.resource_pool_to_cls[resource_pool]["rm"] = rm_cls
 
         # initialize WorkerGroup
@@ -942,10 +953,14 @@ class RayPPOTrainer:
 
                 batch_keys_to_pop = [key for key in batch_keys_try if key in batch.batch]
                 non_tensor_batch_keys_to_pop = [key for key in non_tensor_batch_keys_try if key in batch.non_tensor_batch]
+                
+                # pop out only the necessary keys for generation
                 gen_batch = batch.pop(
                     batch_keys=batch_keys_to_pop,
                     non_tensor_batch_keys=non_tensor_batch_keys_to_pop,
                 )
+                
+                # print(f"gen_batch: {gen_batch.keys()}, {gen_batch}")
 
                 is_last_step = self.global_steps >= self.total_training_steps
 
@@ -979,11 +994,14 @@ class RayPPOTrainer:
 
                             del gen_baseline_batch, gen_baseline_output
 
+                    # assign unique IDs to each prompt
                     batch.non_tensor_batch["uid"] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
                     # repeat to align with repeated responses in rollout
+                    # repeat prompts to match multiple sampled response for each prompt, so repeat interleave num_groups times
                     batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                     batch = batch.union(gen_batch_output)
 
+                    # The attention mask for the response tokens only (not including padding tokens)
                     batch.batch["response_mask"] = compute_response_mask(batch)
                     # Balance the number of valid tokens across DP ranks.
                     # NOTE: This usually changes the order of data in the `batch`,
@@ -998,13 +1016,19 @@ class RayPPOTrainer:
 
                     with _timer("reward", timing_raw):
                         # compute reward model score
+                        # TODO: check whether we use reward fn async or not
+                        # Tfr
                         if self.use_rm:
+                            # used only when we need a seperate network to output the reward.
+                            # TODO: out project would probably go down this path
                             reward_tensor = self.rm_wg.compute_rm_score(batch)
                             batch = batch.union(reward_tensor)
 
                         if self.config.reward_model.launch_reward_fn_async:
                             future_reward = compute_reward_async.remote(batch, self.config, self.tokenizer)
                         else:
+                            # reward tensor has shape [batch_size, response_length], for each response, the position before the last position where attention_mask = 1 is where we put the reward
+                            # because the last position is the <EOS> token, we don't want the model to only learn to generate <EOS> to get the reward.
                             reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
 
                     # recompute old_log_probs
@@ -1021,6 +1045,10 @@ class RayPPOTrainer:
 
                         if "rollout_log_probs" in batch.batch.keys():
                             # TODO: we may want to add diff of probs too.
+                            # the rollout_log_probs is computed during sampling from vllm
+                            # the old_log_probs is the re-computed log_prob using pytorch
+                            # this block is just checking if they have large difference for debugging purpose
+                            # the pytorch version "old_log_probs" will be used to compute the loss
                             rollout_old_log_probs = batch.batch["rollout_log_probs"]
                             actor_old_log_probs = batch.batch["old_log_probs"]
                             attention_mask = batch.batch["attention_mask"]
@@ -1154,6 +1182,23 @@ class RayPPOTrainer:
 
                 progress_bar.update(1)
                 self.global_steps += 1
+                
+                # Every N steps, reset vLLM engine to free memory
+                # vllm_reset_interval = int(os.getenv("VERL_VLLM_RESET_INTERVAL", "0"))
+                # if vllm_reset_interval > 0 and self.global_steps % vllm_reset_interval == 0:
+                #     import time
+                #     print(f"Resetting vLLM engine at step {self.global_steps}")
+                #     for worker in self.actor_rollout_wg.workers:
+                #         if hasattr(worker, 'inference_engine'):
+                #             engine = worker.inference_engine
+                #             if hasattr(engine, 'sleep') and hasattr(engine, 'wake_up'):
+                #                 engine.sleep(level=1)  # Free KV cache
+                #                 time.sleep(3)
+                #                 engine.wake_up()  # Rebuild fresh
+                #     import gc
+                #     gc.collect()
+                #     torch.cuda.empty_cache()
+                
                 if is_last_step:
                     pprint(f"Final validation metrics: {last_val_metrics}")
                     progress_bar.close()

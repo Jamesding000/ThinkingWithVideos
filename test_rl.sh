@@ -36,31 +36,32 @@ fi
 
 # model arch
 # export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/models/Qwen3-VL-2B-Thinking
-export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/outputs/sft_tool/qwen3_vl_2b_thinking_thinking_lr1e_5_4g_sft_data_mtvr_cot_tool_bs128/global_step_137
+export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/outputs/sft/qwen3_vl_2b_thinking_thinking_lr1e_5_4g_sft_data_mtvr_cot_bs128/global_step_41
 export model_path=${STAGE_1_PRETRAINED_CKPT}
-export max_turns=2
-export tool_config_path=verl/verl/tools/config/zoom_tool_config_new.yaml
+export max_turns=0
+export tool_config_path=verl/verl/tools/config/zoom_tool_config.yaml
+export tool_config_path=null ########### set to None for No tools
 # training
-export n_gpus_per_node=8
-export n_cpus=64
+export n_gpus_per_node=2
+export n_cpus=4
 export nnodes=1
-export group_size=4  # 8, 16
-export rollout_batch_size=8  # train_batch_size, TODO: 8 previously lead to OOM
-export update_batch_size=8  # ppo_mini_batch_size, can use the same as train_batch_size
-export ppo_micro_batch_size_per_device=2  # divisor of group_size * update_batch_size / n_gpus_per_node
-export prob_ref_micro_batch_size_per_device=2  # divisor of group_size * update_batch_size / n_gpus_per_node
-export dataloader_num_workers=16  # 16
+export group_size=1  # 8, 16
+export rollout_batch_size=4  # TODO: set to very small for testing
+export update_batch_size=4  # # TODO: set to very small for testing, one step per episode
+export ppo_micro_batch_size_per_device=1  # divisor of group_size * update_batch_size / n_gpus_per_node
+export prob_ref_micro_batch_size_per_device=1  # divisor of group_size * update_batch_size / n_gpus_per_node
+export dataloader_num_workers=8  # 16
 # reward
 export reward_list=[format,iou] ########### set to only iou reward
 # data
 export dataset=data_mtvr_cot_tool_rl
-export dataset_json_path=[data/MultiTaskVideoReasoning/MTVR_Tool_RL/longvideo-reason.json,data/MultiTaskVideoReasoning/MTVR_Tool_RL/vidchapters.json]
+export dataset_json_path=[data/MultiTaskVideoReasoning/MTVR_Tool_RL/longvideo-reason_sampled_30pct.json,data/MultiTaskVideoReasoning/MTVR_Tool_RL/vidchapters_sampled_30pct.json]
 export dataset_video_base=[/data/user_data/jamesdin/data/longvideo-reason/video_14400frames_fps2,/data/user_data/jamesdin/data/vidchapters/video_14400frames_fps2]
 export max_prompt_length=4096
-export max_response_length=7168
+export max_response_length=1024
 export single_turn_response_length=1024
 # name
-export project_name=rl_tool
+export project_name=sft_then_grpo
 export exp_suffix=thinking_lr1e_6
 
 # auto config
@@ -97,8 +98,8 @@ export RAY_DEDUP_LOGS=0
 # 🔥 vLLM 0.11.0 Memory Leak Workaround
 # Reset vLLM engine every N steps to free accumulated KV cache memory
 # Recommended: 50 (each reset takes ~10-20 seconds but prevents OOM)
-export VERL_VLLM_RESET_INTERVAL=15
-export VLLM_MM_INPUT_CACHE_GIB=4
+export VERL_VLLM_RESET_INTERVAL=5
+export VLLM_MM_INPUT_CACHE_GIB=0
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=dgrpo \
@@ -177,4 +178,6 @@ python3 -m verl.trainer.main_ppo \
     trainer.validation_data_dir=$SAVE_PATH/evaluations \
     trainer.val_before_train=False \
     trainer.balance_batch=True \
+    trainer.nnodes=$nnodes \
+    trainer.n_gpus_per_node=$n_gpus_per_node \
     ray_init.num_cpus=$n_cpus \

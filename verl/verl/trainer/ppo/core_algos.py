@@ -260,6 +260,8 @@ def compute_dgrpo_outcome_advantage(
             else:
                 scores[i] = scores[i] - id2mean[index[i]]
             # difficulty-aware GRPO, enhance difficult samples
+            # the difficulty = 2 - mean reward of the group
+            # scale score by (difficulty + 1) / 2 to promote learning on difficult samples
             difficulty = 2.0 - id2mean[index[i]]
             difficulty = max(min(difficulty, 1.0), 0.0)  # [0 ~ 1]
             scores[i] = scores[i] * (difficulty + 1) / 2

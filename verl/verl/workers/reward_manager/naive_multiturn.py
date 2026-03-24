@@ -42,6 +42,8 @@ class NaiveMultiturnRewardManager:
 
     def __call__(self, data: DataProto, return_dict=False):
         """We will expand this function gradually based on the available datasets"""
+        
+        print(f"🔥 REWARD MANAGER CALLED! Data size: {len(data)}, return_dict: {return_dict}")  # Add this!
 
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
         if "rm_scores" in data.batch.keys():

@@ -10,15 +10,13 @@ import argparse
 import numpy as np
 from tqdm import tqdm
 from decord import VideoReader, cpu
-from download_and_extract_frames import extract_youtube_id
 
 # from qwen_vl_utils import process_vision_info
 from verl.utils.dataset.video_vl_utils import process_vision_info, cached_process_vision_info
-from verl.utils.dataset.vision_utils import process_video
+from download_and_extract_frames import extract_youtube_id
 
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoProcessor, GenerationConfig, AutoConfig, AutoModelForVision2Seq
 from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLConfig
-from transformers import Qwen3VLForConditionalGeneration, Qwen3VLConfig
 from peft import AutoPeftModelForCausalLM
 from collections import defaultdict
 
@@ -30,8 +28,9 @@ from verl.workers.rollout.vllm_rollout.vllm_rollout_spmd_multi_turn_sync import 
 from verl.tools.base_tool import initialize_tools_from_config
 import uuid
 
-VIDEO_INFO_CACHE = {}
 TEMPLATE = os.getenv("MY_PROMPT_TEMPLATE", default="Please find the visual event described by a sentence in the video, determining its starting and ending times. The format should be: 'The event happens in the start time - end time'. For example, The event 'person turn a light on' happens in the 24.30 - 30.42 seconds. Now I will give you the textual sentence: {input_text}. Please return its start time and end time.")
+
+VIDEO_INFO_CACHE = {}
 
 def set_seed(seed):
     random.seed(seed)
@@ -100,6 +99,8 @@ class VideoQADataset(Dataset):
                 id_set = set(id_set)
                 gt_questions = [sample for sample in gt_questions if sample['id'] not in id_set]
         self.data = gt_questions
+        # Use prompt template from args if provided, otherwise use default
+        self.template = getattr(args, 'prompt_template', TEMPLATE) if hasattr(args, 'prompt_template') and args.prompt_template else TEMPLATE
         content_video = {
             "type": "video",
             "video": None,
@@ -123,11 +124,6 @@ class VideoQADataset(Dataset):
         self.content_image = content_image
         self.video_dir = args.video_dir
         self.processor = processor
-        
-        # Detect model type
-        self.is_qwen2_5 = 'Qwen2_5' in processor.__class__.__name__
-        self.is_qwen3 = 'Qwen3' in processor.__class__.__name__
-
         tool_config_path = "verl/verl/tools/config/zoom_tool_config_new.yaml"
         tool_list = initialize_tools_from_config(tool_config_path)
         tool_schemas = [tool.tool_schema.model_dump(exclude_unset=True, exclude_none=True) for tool in tool_list]
@@ -140,17 +136,17 @@ class VideoQADataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        try:
-            return self.getitem(idx)
-        except Exception as e:
-            video_id = self.data[idx]['video_id'] if 'video_id' in self.data[idx] else self.data[idx]['video']
-            # Note: With num_workers>0, you may see duplicate error messages from worker processes
-            # This is just logging - each sample is still evaluated exactly once
-            print(f"[ERROR] idx={idx}, video={video_id}, error: {e}")
-            # Return None to signal this sample should be skipped
-            return None
-    
+        while idx < len(self.data):
+            try:
+                return self.getitem(idx)
+            except Exception as e:
+                video_id = self.data[idx]['video_id'] if 'video_id' in self.data[idx] else self.data[idx]['video']
+                print(f"[ERROR] idx={idx}, video={video_id}, error: {e}")
+                idx += 1
+        raise RuntimeError("All samples from current idx onward failed.")
+
     def getitem(self, idx):
+
         sample = self.data[idx]
         if not 'question' in sample:
             sample['question'] = sample['text']
@@ -160,14 +156,12 @@ class VideoQADataset(Dataset):
         if 'video' in sample or 'video_id' in sample:
             video_name = sample['video_id'] if 'video_id' in sample else sample['video']
             video_path, fps = None, 2.0
-            
-            # Try pre-extracted frames first
             video_frame_path = os.path.join(self.video_dir, video_name.split('.')[0])
             sample['video_path'] = os.path.join(self.video_dir, video_name)  # for tool call
             
             if not os.path.exists(video_frame_path):
                 video_frame_path = os.path.join(self.video_dir, extract_youtube_id(video_name.split(".")[0]))
-            
+                
             if os.path.exists(video_frame_path):
                 frame_paths = os.listdir(video_frame_path)
                 frame_paths = sorted(frame_paths, key=lambda x: int(x.split("_")[-1].split(".")[0]))
@@ -176,9 +170,8 @@ class VideoQADataset(Dataset):
                 if 'videommmu' in self.video_dir:
                     frame_paths.append(frame_paths[-1])
                 video_path = frame_paths
-                fps = len(frame_paths) / float(sample['duration'])
+                fps = len(frame_paths) / sample['duration']
             else:
-                # Fallback to raw video file if no frame dir exists
                 for ext in ['.mp4', '.webm', '.mkv', '.avi']:
                     path = os.path.join(self.video_dir, video_name.split('.')[0] + ext)
                     if os.path.exists(path):
@@ -186,22 +179,20 @@ class VideoQADataset(Dataset):
                         break
             if video_path is None:
                 raise FileNotFoundError(f"Video file for {video_name} not found.")
-            question = TEMPLATE.format(input_text=sample['question'], duration=sample['duration'])
+            question = self.template.format(input_text=sample['question'], duration=sample['duration'])
             content_mm = self.content_video.copy()
             content_mm['video'] = video_path
             content_mm['fps'] = fps
             content_mm['draw_number'] = not self.no_number
             content_mm['parallel'] = True
         elif 'image' in sample:
-            img_template = TEMPLATE.replace("This is a video with duration {duration} seconds.", "This is an image.")
+            img_template = self.template.replace("This is a video with duration {duration} seconds.", "This is an image.")
             question = img_template.format(input_text=sample['question'])
             image_path = os.path.join(self.video_dir, sample['image'])
             content_mm = self.content_image.copy()
             content_mm['image'] = image_path
         else:
             raise ValueError(f"Not a multimodal sample! Neither 'video' nor 'image' key found in sample: {sample}")
-        
-        # Build multi-turn messages
         messages = [
             {
                 "role": "system",
@@ -215,55 +206,19 @@ class VideoQADataset(Dataset):
                 ],
             }
         ]
-        
-        # Build mm_data & mm_processor_kwargs
+        if args.no_cache:
+            image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True)
+        else:
+            image_inputs, video_inputs, video_kwargs = cached_process_vision_info(messages, return_video_kwargs=True)
         mm_data = {}
-        mm_processor_kwargs = {}
-        
-        if self.is_qwen2_5:
-            # Qwen2.5: Use process_vision_info
-            if args.no_cache:
-                image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True)
-            else:
-                image_inputs, video_inputs, video_kwargs = cached_process_vision_info(messages, return_video_kwargs=True)
-            
-            if image_inputs is not None:
-                mm_data["image"] = image_inputs
-            if video_inputs is not None:
-                mm_data["video"] = video_inputs
-            mm_processor_kwargs = {'fps': 2.0}  # set fps to 2.0
-        
-        elif self.is_qwen3:
-            # Qwen3: Load frames manually with process_video
-            if content_mm.get("type") == "image":
-                mm_data["image"] = [content_mm["image"]]
-                mm_processor_kwargs["fps"] = []
-            
-            if content_mm.get("type") == "video":
-                video_spec = content_mm.copy()
-                frames, fps_eff = process_video(video_spec)
-                
-                n_frames = len(frames)
-                if n_frames == 0:
-                    raise RuntimeError(f"No frames loaded for {video_name}")
-                
-                # Create metadata structure for Qwen3
-                metadata = {
-                    "total_num_frames": n_frames,
-                    "fps": float(fps_eff),
-                    "duration": float(n_frames) / float(fps_eff) if fps_eff > 0 else float(sample.get("duration", n_frames / 2.0)),
-                    "frames_indices": np.arange(n_frames),
-                    "do_sample_frames": False,
-                }
-                
-                # NOTE: each video item is a TUPLE (frames, metadata_dict)
-                mm_data["video"] = [(frames, metadata)]
-                mm_processor_kwargs["fps"] = [float(fps_eff)]
-        
+        if image_inputs is not None:
+            mm_data["image"] = image_inputs
+        if video_inputs is not None:
+            mm_data["video"] = video_inputs
         vllm_inputs = {
             "messages": messages,
             "multi_modal_data": mm_data,
-            "mm_processor_kwargs": mm_processor_kwargs,
+            "mm_processor_kwargs": {'fps': 2.0},  # set fps to 2.0
         }
         sample['vllm_inputs'] = vllm_inputs
         # ranki_print(f'In dataset, sample id: {sample["id"]}, video len = {len(video_inputs[0])} shape = {video_inputs[0][0].size} fps = {video_kwargs}')
@@ -320,13 +275,7 @@ def run_inference(args):
         args: Command-line arguments.
     """
     use_flash_attn = True
-    
-    # Auto-detect model type from model_path
-    if 'Qwen3' in args.model_path or 'qwen3' in args.model_path.lower():
-        qwen_path = "/data/user_data/jamesdin/models/Qwen3-VL-2B-Thinking"
-    else:
-        qwen_path = '/data/user_data/jamesdin/models/Qwen2.5-VL-3B-Instruct'
-    
+    qwen_path = '/data/user_data/jamesdin/models/Qwen2.5-VL-3B-Instruct'
     assert args.backend == 'vllm'
     llm = vllm.LLM(
         model=args.model_path,
@@ -335,18 +284,12 @@ def run_inference(args):
         max_num_batched_tokens=8192,
         # disable_chunked_mm_input=True,
         # limit_mm_per_prompt={'image': 0, 'video': 2},
-        max_model_len=65536,
         gpu_memory_utilization=0.7,
+        max_model_len=65536,
         enforce_eager=True,
     )
     processor = AutoProcessor.from_pretrained(qwen_path, trust_remote_code=True, use_fast=True)
     ranki_print("Load model and processor success!")
-    
-    # Detect processor type
-    is_qwen2_5 = 'Qwen2_5' in processor.__class__.__name__
-    is_qwen3 = 'Qwen3' in processor.__class__.__name__
-    if not is_qwen2_5 and not is_qwen3:
-        raise ValueError(f"Unsupported model architecture: {processor.__class__.__name__}")
 
     # Create the output directory if it doesn't exist
     if not os.path.exists(args.output_dir):
@@ -363,11 +306,6 @@ def run_inference(args):
 
     dataset = VideoQADataset(args, processor)
     batch_size = 8 // args.repeat_times
-    # Custom collate function that filters out None (failed samples)
-    def collate_fn_filter_none(batch):
-        # Filter out None values (failed video loads)
-        return [sample for sample in batch if sample is not None]
-    
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -375,7 +313,7 @@ def run_inference(args):
         num_workers=4,
         pin_memory=True, 
         drop_last=False,
-        collate_fn=collate_fn_filter_none, 
+        collate_fn=lambda batch: batch, 
     )
     ans_file = open(answers_file, "a")
 
@@ -392,38 +330,19 @@ def run_inference(args):
         include_stop_str_in_output=True,  # Important
     )
     for samples in tqdm(dataloader, desc=f"cuda:{args.chunk_idx}"):
-        # Skip empty batches (all samples failed to load)
-        if len(samples) == 0:
-            continue
-        
         # start multi-turn conversation
         cur_batch_size = len(samples)
         active_mask = torch.ones(cur_batch_size, dtype=torch.bool, device='cuda')  # if sample is active
         turns_stats = torch.ones(cur_batch_size, dtype=torch.int, device='cuda')  # number of turns
         valid_action_stats = torch.zeros(cur_batch_size, dtype=torch.int, device='cuda')  # number of valid actions
         valid_tool_call_stats = torch.zeros(cur_batch_size, dtype=torch.int, device='cuda')  # number of valid tools
-        valid_tool_exec_stats = torch.zeros(cur_batch_size, dtype=torch.int, device='cuda')  # number of valid tools
+        valid_tool_exec_stats = torch.zeros(batch_size, dtype=torch.int, device='cuda')  # number of valid tools
         active_num_list = [active_mask.sum().item()]
         response_ids = [[] for _ in range(cur_batch_size)]
         response_preds = ["" for _ in range(cur_batch_size)]
 
         max_turns = 2
         vllm_inputs = [sample['vllm_inputs'] for sample in samples]
-        
-        # Normalize video structure for Qwen3: [frames, metadata] -> (frames, metadata)
-        if is_qwen3:
-            for req in vllm_inputs:
-                mm_data = req.get("multi_modal_data", {})
-                if "video" in mm_data and mm_data["video"] is not None:
-                    fixed_videos = []
-                    for v in mm_data["video"]:
-                        if isinstance(v, list) and len(v) == 2:
-                            fixed_videos.append((v[0], v[1]))
-                        else:
-                            fixed_videos.append(v)
-                    mm_data["video"] = fixed_videos
-                    req["multi_modal_data"] = mm_data
-        
         for step in range(max_turns + 1):
             ranki_print(f'>>> [step {step} / {max_turns + 1}]')
             active_id_list = torch.where(active_mask)[0].tolist()
@@ -502,35 +421,14 @@ def run_inference(args):
                                 tool_result["ele"],
                                 {
                                     "type": "text",
-                                    "text": teaser,
+                                    "text": teaser
                                 }
                             ]
                             new_prompt_str = "<|vision_start|><|video_pad|><|vision_end|>" + teaser
-                            
-                            if is_qwen2_5:
-                                # Qwen2.5: plain frames list
-                                new_videos = [tool_result["video"]]
-                                new_fps = [tool_result["fps"]]
-                                vllm_inputs[idx]["multi_modal_data"]["video"].extend(new_videos)
-                            elif is_qwen3:
-                                # Qwen3: (frames, metadata) tuple for vLLM, plain frames for HF processor
-                                frames = tool_result["video"]
-                                fps_val = float(tool_result["fps"])
-                                n_frames = len(frames)
-                                metadata = {
-                                    "total_num_frames": n_frames,
-                                    "fps": float(fps_val),
-                                    "duration": float(n_frames) / float(fps_val) if fps_val > 0 else float(samples[idx].get("duration", n_frames / 2.0)),
-                                    "frames_indices": np.arange(n_frames),
-                                    "do_sample_frames": False,
-                                }
-                                vllm_video_item = (frames, metadata)
-                                vllm_inputs[idx]["multi_modal_data"]["video"].append(vllm_video_item)
-                                
-                                # HF processor side: plain frames + scalar fps
-                                new_videos = [frames]
-                                new_fps = fps_val  # scalar, NOT [fps]
-                        
+                            new_videos = [tool_result["video"]]
+                            new_fps = [tool_result["fps"]]  # Here is a bug of VLLM V1 Engine
+                            vllm_inputs[idx]["multi_modal_data"]["video"].extend(new_videos)
+                            # vllm_inputs[idx]["mm_processor_kwargs"]["fps"].extend(new_fps)
                         new_message = {
                             "role": "tool",
                             "content": new_content,
@@ -591,6 +489,7 @@ if __name__ == "__main__":
     parser.add_argument("--backend", type=str, default="vllm", choices=["vllm", "transformers"])
     parser.add_argument("--repeat_times", type=int, default=1)
     parser.add_argument("--no-number", action="store_true", default=False)
+    parser.add_argument("--prompt-template", type=str, default=None, help="Prompt template string. If not provided, uses default TEMPLATE.")
     
     global args
     args = parser.parse_args()

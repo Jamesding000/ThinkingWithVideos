@@ -36,19 +36,19 @@ fi
 
 # model arch
 # export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/models/Qwen2.5-VL-3B-Instruct
-export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/outputs/sft/qwen2.5_vl_3b_instruct_thinking_tool_lr1e_5_4g_sft_data_mtvr_cot_tool_bs128/global_step_82
+export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/outputs/sft_tool/qwen2.5_vl_3b_instruct_thinking_tool_lr1e_5_4g_sft_data_mtvr_cot_tool_bs128/global_step_137
 export model_path=${STAGE_1_PRETRAINED_CKPT}
 export max_turns=2
 export tool_config_path=verl/verl/tools/config/zoom_tool_config_new.yaml
 # training
 export n_gpus_per_node=8
-export n_cpus=64
-export nnodes=1
-export group_size=4  # 8, 16
-export rollout_batch_size=8  # train_batch_size, TODO: 8 previously lead to OOM
-export update_batch_size=8  # ppo_mini_batch_size, can use the same as train_batch_size
+export n_cpus=128
+export nnodes=2
+export group_size=8  # 8
+export rollout_batch_size=64  # train_batch_size, TODO: 8 previously lead to OOM
+export update_batch_size=64  # ppo_mini_batch_size, can use the same as train_batch_size
 export ppo_micro_batch_size_per_device=2  # divisor of group_size * update_batch_size / n_gpus_per_node
-export prob_ref_micro_batch_size_per_device=2  # divisor of group_size * update_batch_size / n_gpus_per_node
+export prob_ref_micro_batch_size_per_device=4  # divisor of group_size * update_batch_size / n_gpus_per_node
 export dataloader_num_workers=16  # 16
 # reward
 export reward_list=[format,iou] ########### set to only iou reward
@@ -97,8 +97,8 @@ export RAY_DEDUP_LOGS=0
 # 🔥 vLLM 0.11.0 Memory Leak Workaround
 # Reset vLLM engine every N steps to free accumulated KV cache memory
 # Recommended: 50 (each reset takes ~10-20 seconds but prevents OOM)
-export VERL_VLLM_RESET_INTERVAL=15
-export VLLM_MM_INPUT_CACHE_GIB=4
+# export VERL_VLLM_RESET_INTERVAL=15
+# export VLLM_MM_INPUT_CACHE_GIB=4
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=dgrpo \

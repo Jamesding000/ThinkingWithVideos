@@ -36,7 +36,7 @@ fi
 
 # model arch
 # export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/models/Qwen3-VL-2B-Thinking
-export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/outputs/sft/qwen3_vl_2b_thinking_thinking_lr1e_5_4g_sft_data_mtvr_cot_bs128/global_step_41
+export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/outputs/sft_tool/qwen3_vl_2b_thinking_thinking_lr1e_5_4g_sft_data_mtvr_cot_tool_bs128/global_step_137
 export model_path=${STAGE_1_PRETRAINED_CKPT}
 export max_turns=2
 export tool_config_path=verl/verl/tools/config/zoom_tool_config_new.yaml

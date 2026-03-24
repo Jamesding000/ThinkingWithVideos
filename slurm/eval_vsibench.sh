@@ -4,7 +4,7 @@
 #SBATCH --time=47:00:00              # <= 48h limit on general
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4          # 1 task per GPU
-#SBATCH --gres=gpu:A6000:4           # Request 4 A6000 GPUs
+#SBATCH --gres=gpu:L40S:4           # Request 4 A6000 GPUs
 #SBATCH --cpus-per-task=16           # For dataloaders / preprocessing
 #SBATCH --mem=250GB                  # Adjust as needed, safe for 4 GPUs
 #SBATCH --output=/home/jamesdin/logs/eval_vsibench-%j.out
@@ -49,10 +49,18 @@ User Question:
 
 # Model configuration
 # export model_paths=(/data/user_data/jamesdin/exports/qwen3_vl_2b_thinking_step41_hf /data/user_data/jamesdin/exports/qwen3_vl_2b_thinking_tool_rl_step577_hf /data/user_data/jamesdin/models/Qwen3-VL-2B-Thinking)
-export model_paths=(/data/user_data/jamesdin/exports/qwen3_vl_2b_thinking_tool_rl_step577_hf)
+# export model_paths=(/data/user_data/jamesdin/exports/qwen3_vl_2b_thinking_tool_rl_step577_hf)
+export model_paths=(
+    /data/user_data/jamesdin/exports/qwen3_vl_2b_thinking_tool_rl_bs8_step1926_hf \
+    /data/user_data/jamesdin/exports/qwen3_vl_2b_thinking_tool_rl_step577_hf \
+    /data/user_data/jamesdin/exports/qwen3_vl_2b_thinking_tool_sft_step137_hf \
+    /data/user_data/jamesdin/models/Qwen3-VL-2B-Thinking \
+    /data/user_data/jamesdin/models/Qwen2.5-VL-3B-Instruct \
+    /data/user_data/jamesdin/exports/qwen2.5_vl_3b_instruct_tool_sft_step137_hf \
+    )
 
 # GPU configuration
-export n_gpus_per_node=2
+export n_gpus_per_node=4
 
 # Evaluation parameters
 max_pixels_expr='384*384'

@@ -4,9 +4,9 @@
 #SBATCH --time=47:00:00              # <= 48h limit on general
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4          # 1 task per GPU
-#SBATCH --gres=gpu:A6000:4           # 4 GPUs
+#SBATCH --gres=gpu:L40S:8           # 4 GPUs
 #SBATCH --cpus-per-task=8            # 8 * 4 = 32 CPUs total
-#SBATCH --mem=120GB                  # safe for 4 GPUs + dataloaders
+#SBATCH --mem=1250GB                  # safe for 4 GPUs + dataloaders
 #SBATCH --output=/home/jamesdin/logs/verl-rl-%j.out
 #SBATCH --error=/home/jamesdin/logs/verl-rl-%j.err
 #SBATCH --mail-type=END,FAIL
@@ -27,7 +27,7 @@ export NCCL_IB_DISABLE=1
 export NCCL_P2P_DISABLE=1
 
 export nnodes=${SLURM_NNODES:-1}
-export n_gpus_per_node=${SLURM_GPUS_ON_NODE:-4}
+export n_gpus_per_node=${SLURM_GPUS_ON_NODE:-8}
 export WORLD_SIZE=$(( nnodes * n_gpus_per_node ))
 
 echo "SLURM_NNODES=$SLURM_NNODES"
@@ -35,6 +35,6 @@ echo "SLURM_GPUS_ON_NODE=$SLURM_GPUS_ON_NODE"
 echo "WORLD_SIZE=$WORLD_SIZE"
 
 # Launch your RL script (which sets n_gpus_per_node=4, n_cpus=16, etc.)
-bash test_rl_babel.sh
+bash test_rl_tool_babel.sh
 
 echo "==== Job finished at $(date) ===="
