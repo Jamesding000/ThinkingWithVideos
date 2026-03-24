@@ -102,7 +102,37 @@ def default_compute_score(
         from . import search_r1_like_qa_em
 
         res = search_r1_like_qa_em.compute_score(solution_str, ground_truth)
+<<<<<<< Updated upstream:verl/utils/reward_score/__init__.py
 
+=======
+    elif data_source in ['./data/charades', "./data/actnet"]:  # TG task
+        from . import charades
+        if extra_info is not None:
+            res = charades.compute_score(solution_str, ground_truth, extra_info)
+        else:
+            res = charades.compute_score(solution_str, ground_truth)
+    elif data_source in ['./data/charades_cutreward', "./data/actnet_cutreward"]:  # TG task
+        from . import charades_cutreward
+        if extra_info is not None:
+            res = charades_cutreward.compute_score(solution_str, ground_truth, extra_info)
+        else:
+            res = charades_cutreward.compute_score(solution_str, ground_truth)
+    elif data_source in ['./data/vidchapter_cutreward', './data/vidchapter']:  # TG task
+        from . import vidchapter_cutreward
+        if extra_info is not None:
+            res = vidchapter_cutreward.compute_score(solution_str, ground_truth, extra_info)
+        else:
+            res = vidchapter_cutreward.compute_score(solution_str, ground_truth)
+    elif data_source in ["./data/video_r1/multiple_choice", "./data/video_r1/numerical", "./data/video_r1/free_form", "./data/video_r1/regression", "./data/video_r1/OCR"]:
+        from . import video_r1
+        res = video_r1.compute_score(solution_str, ground_truth, extra_info, problem_type=data_source.split('/')[-1])
+    elif data_source in ["./data/rextime", "./data/nextgqa"]:
+        from . import gqa
+        res = gqa.compute_score(solution_str, ground_truth, extra_info, problem_type=data_source.split('/')[-1])
+    elif data_source in ["./data/rextime_cutreward", "./data/nextgqa_cutreward"]:
+        from . import gqa_cutreward
+        res = gqa_cutreward.compute_score(solution_str, ground_truth, extra_info, problem_type=data_source.split('/')[-1].replace('_cutreward', ''))
+>>>>>>> Stashed changes:verl/verl/utils/reward_score/__init__.py
     else:
         raise NotImplementedError(f"Reward function is not implemented for {data_source=}")
 

@@ -34,7 +34,7 @@ export exp_suffix=thinking_tool_lr1e_6
 
 # auto config
 export EXP_NAME=qwen3_vl_2b_thinking_${exp_suffix}_${n_gpus_per_node}g_sft_${dataset}_bs${batch_size}
-export SAVE_PATH=outputs/${project_name}/${EXP_NAME}
+export SAVE_PATH=/data/user_data/jamesdin/outputs/${project_name}/${EXP_NAME}
 
 export WANDB_API_KEY=$(jq -r '.WANDB_API_KEY' secret.json)
 export WANDB_MODE=offline

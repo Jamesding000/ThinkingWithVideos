@@ -25,6 +25,29 @@ import logging
 import numpy as np
 
 
+# VQA_TEMPLATE = """You are a careful visual question answering assistant.
+
+# You will see a video and a question about it. Your job is to:
+# 1. Think step by step about the visual content and the question.
+# 2. Then give a single **integer** answer in digits (e.g., 0, 1, 2), not words (no "two", "three", etc.).
+# 3. Wrap **only** that integer inside <answer> and </answer> tags.
+# 4. Your final output must end with exactly one line in this format, and nothing else:
+
+# <answer>INTEGER</answer>
+
+# Example:
+# If the correct answer is 3, you must end with:
+# <answer>3</answer>
+
+# Now use the video and question below.
+
+# Video duration: {duration} seconds.
+# Question: {input_text}
+
+# First, think carefully about the video. Then, at the end, output ONLY the final answer in the required format:
+
+# <answer>"""
+
 """
 Expected format for the ground truth json file:
 required feilds: "id", "answer", "question_type".
@@ -319,6 +342,8 @@ if __name__ == "__main__":
         exit(0)
     print(f'[main] Execute {args.dataset} evaluation')
     out_dir, gt_file = launch_multi_gpu_eval(args, **info, evaluation_name=args.evaluation_name)
+    # out_dir = "/data/user_data/jamesdin/outputs/eval/qwen3_vl_2b_thinking_step41_hf/evaluation_maxpix384*384_maxfrm256_number/vsibench"
+    # gt_file = "/data/user_data/jamesdin/data/vsibench/test_set_grpo.json"
     print(f'[main] Execute {args.dataset} evaluation')
     calc_eval_result(out_dir, gt_file, args.num_chunks, info['data_file'])
 

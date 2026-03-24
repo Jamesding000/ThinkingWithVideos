@@ -3,15 +3,28 @@ set -x
 export DO_TRAIN=1
 export DO_EVAL=0
 
-export user_prompt_template=THINK_GENERAL
+export user_prompt_template=THINK_GENERAL_TOOL
 export MY_PROMPT_TEMPLATE="This is a video with duration {duration} seconds.
 You should first think the user's question step-by-step and then provides the user with the answer. 
 Note that there must be an answer for each question and you must answer it.
-Output your thought process within the <think> </think> tags, and output your answer within the <answer> </answer> tags,
-i.e., <think> ... </think><answer> ... </answer>.
+# Instruction
+1. Output your thought process within the <think> </think> tags, and output your answer within the <answer> </answer> tags.
+2. You can call the provided tools ONCE to get more visual information within the <tool_call> </tool_call> tags. 
+3. When you get the tool result, you need to integrate your initial reasoning with the new visual evidence from the tool, think step-by-step again and provide the final answer. 
+# Output Format
+<think> ... </think> <tool_call> ... </tool_call> <think> ... </think> <answer> ... </answer>
 User Question: 
 {input_text}"
 
+# vLLM settings to prevent CPU swap
+# export VLLM_CPU_KVCACHE_SPACE=0  # Disable CPU KV cache swap (force GPU only)
+# export VLLM_SWAP_SPACE=0  # Disable swap space entirely
+
+# 🔥 vLLM 0.11.0 Memory Leak Workaround
+# Reset vLLM engine every N steps to free accumulated KV cache memory
+# Recommended: 50 (each reset takes ~10-20 seconds but prevents OOM)
+export VERL_VLLM_RESET_INTERVAL=15
+export VLLM_MM_INPUT_CACHE_GIB=4
 
 export ENGINE=vllm
 export ENGINE_MODE=multi_turn_sync
@@ -25,7 +38,8 @@ fi
 # export VLLM_ATTENTION_BACKEND=XFORMERS
 
 # model arch
-export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/models/Qwen3-VL-2B-Thinking
+# export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/models/Qwen3-VL-2B-Thinking
+export STAGE_1_PRETRAINED_CKPT=/data/user_data/jamesdin/outputs/sft/qwen3_vl_2b_thinking_thinking_lr1e_5_4g_sft_data_mtvr_cot_bs128/global_step_41
 export model_path=${STAGE_1_PRETRAINED_CKPT}
 export max_turns=0
 export tool_config_path=verl/verl/tools/config/zoom_tool_config.yaml
@@ -35,19 +49,19 @@ export n_gpus_per_node=4
 export n_cpus=24
 export nnodes=1
 export group_size=4  # 8, 16
-export rollout_batch_size=16  # TODO: set to very small for testing
-export update_batch_size=16  # # TODO: set to very small for testing, one step per episode
+export rollout_batch_size=4  # train_batch_size, TODO: 8 previously lead to OOM
+export update_batch_size=4  # ppo_mini_batch_size, can use the same as train_batch_size
 export ppo_micro_batch_size_per_device=2  # divisor of group_size * update_batch_size / n_gpus_per_node
 export prob_ref_micro_batch_size_per_device=4  # divisor of group_size * update_batch_size / n_gpus_per_node
 export dataloader_num_workers=8  # 16
 # reward
 export reward_list=[format,iou] ########### set to only iou reward
 # data
-export dataset=data_mtvr_rl
-export dataset_json_path=[data/MultiTaskVideoReasoning/MTVR_RL/charades.json]
-export dataset_video_base=[/data/user_data/jamesdin/data/charades/video_14400frames_fps2]
-export max_prompt_length=3072
-export max_response_length=1024
+export dataset=data_mtvr_cot_tool_rl
+export dataset_json_path=[data/MultiTaskVideoReasoning/MTVR_Tool_RL/longvideo-reason_sampled_30pct.json,data/MultiTaskVideoReasoning/MTVR_Tool_RL/vidchapters_sampled_30pct.json]
+export dataset_video_base=[/data/user_data/jamesdin/data/longvideo-reason/video_14400frames_fps2,/data/user_data/jamesdin/data/vidchapters/video_14400frames_fps2]
+export max_prompt_length=4096
+export max_response_length=7168
 export single_turn_response_length=1024
 # name
 export project_name=sft_then_grpo
@@ -55,7 +69,7 @@ export exp_suffix=thinking_lr1e_6
 
 # auto config
 export EXP_NAME=qwen3_vl_2b_${exp_suffix}_${n_gpus_per_node}g_grpo_${dataset}_gs${group_size}_bs${rollout_batch_size}
-export SAVE_PATH=outputs/${project_name}/${EXP_NAME}
+export SAVE_PATH=/data/user_data/jamesdin/outputs/${project_name}/${EXP_NAME}
 export WANDB_API_KEY=$(jq -r '.WANDB_API_KEY' secret.json)
 export WANDB_MODE=online
 export WANDB_DIR=${SAVE_PATH}
@@ -131,6 +145,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=False \
     actor_rollout_ref.rollout.disable_log_stats=False \
+    +actor_rollout_ref.rollout.engine_kwargs.vllm.disable_mm_preprocessor_cache=True \
     actor_rollout_ref.rollout.n=$group_size \
     +actor_rollout_ref.rollout.single_turn_response_length=$single_turn_response_length \
     actor_rollout_ref.rollout.multi_turn.enable=True \

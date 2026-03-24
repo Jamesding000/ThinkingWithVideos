@@ -10,6 +10,7 @@ import argparse
 import numpy as np
 from tqdm import tqdm
 from decord import VideoReader, cpu
+from download_and_extract_frames import extract_youtube_id
 
 # from qwen_vl_utils import process_vision_info
 from verl.utils.dataset.video_vl_utils import process_vision_info, cached_process_vision_info
@@ -62,6 +63,8 @@ class VideoQADataset(Dataset):
                 id_set = set(id_set)
                 gt_questions = [sample for sample in gt_questions if sample['id'] not in id_set]
         self.data = gt_questions
+        # Use prompt template from args if provided, otherwise use default
+        self.template = getattr(args, 'prompt_template', TEMPLATE) if hasattr(args, 'prompt_template') and args.prompt_template else TEMPLATE
         content_video = {
             "type": "video",
             "video": None,
@@ -91,100 +94,107 @@ class VideoQADataset(Dataset):
 
     def __getitem__(self, idx):
         while idx < len(self.data):
-            # try:
-                sample = self.data[idx]
-                if not 'question' in sample:
-                    sample['question'] = sample['text']
-                if not 'answer' in sample:
-                    sample['answer'] = str(sample['solution'])
-                
-                if 'video' in sample or 'video_id' in sample:
-                    video_name = sample['video_id'] if 'video_id' in sample else sample['video']
-                    video_path, fps = None, 2.0
-                    video_frame_path = os.path.join(self.video_dir, video_name.split('.')[0])
-                    if os.path.exists(video_frame_path):
-                        frame_paths = os.listdir(video_frame_path)
-                        frame_paths = sorted(frame_paths, key=lambda x: int(x.split("_")[-1].split(".")[0]))
-                        frame_paths = [os.path.join(video_frame_path, frame_path) for frame_path in frame_paths]
-                        total_frames = len(frame_paths)
-                        if args.max_frames is not None and total_frames > args.max_frames:
-                            idxes = torch.linspace(0, total_frames - 1, args.max_frames).round().long().tolist()
-                            if 'videommmu' in self.video_dir:
-                                idxes.append(total_frames - 1)
-                            frame_paths = [frame_paths[i] for i in idxes]
-                            # fps = args.max_frames / max(total_frames, 1e-6) * fps
-                        video_path = frame_paths
-                        fps = len(frame_paths) / sample['duration']
-                    else:
-                        for ext in ['.mp4', '.webm', '.mkv', '.avi']:
-                            path = os.path.join(self.video_dir, video_name.split('.')[0] + ext)
-                            if os.path.exists(path):
-                                video_path = path
-                                break
-                    if video_path is None:
-                        raise FileNotFoundError(f"Video file for {video_name} not found.")
-                    question = TEMPLATE.format(input_text=sample['question'], duration=sample['duration'])
-                    content_mm = self.content_video.copy()
-                    content_mm['video'] = video_path
-                    content_mm['fps'] = fps
-                    content_mm['draw_number'] = True
-                    content_mm['parallel'] = True
-
-                elif 'image' in sample:
-                    img_template = TEMPLATE.replace("This is a video with duration {duration} seconds.", "This is an image.")
-                    question = img_template.format(input_text=sample['question'])
-                    image_path = os.path.join(self.video_dir, sample['image'])
-                    content_mm = self.content_image.copy()
-                    content_mm['image'] = image_path
-                else:
-                    raise ValueError(f"Not a multimodal sample! Neither 'video' nor 'image' key found in sample: {sample}")
-                messages = [
-                    {
-                        "role": "user",
-                        "content": [
-                            content_mm,
-                            {"type": "text", "text": question},
-                        ],
-                    }
-                ]
-                text = self.processor.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
-                )
-                if args.no_cache:
-                    image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True)
-                else:
-                    image_inputs, video_inputs, video_kwargs = cached_process_vision_info(messages, return_video_kwargs=True)
-
-                mm_data = {}
-                if image_inputs is not None:
-                    mm_data["image"] = image_inputs
-                if video_inputs is not None:
-                    mm_data["video"] = video_inputs
-                llm_inputs = {
-                    "prompt": text,
-                    "multi_modal_data": mm_data,
-                    "mm_processor_kwargs": video_kwargs,
-                }
-                sample['llm_inputs'] = llm_inputs
-
-                inputs = self.processor(
-                    text=[text],
-                    images=image_inputs,
-                    videos=video_inputs,
-                    fps=video_kwargs["fps"],
-                    padding=True,
-                    padding_side='left',
-                    return_tensors="pt",
-                )
-                if video_inputs is not None:
-                    ranki_print(f'In dataset, {inputs.input_ids.shape=}, {inputs.video_grid_thw=}')
-                # 返回你需要的内容
-                return sample
-            
-            # except Exception as e:
-            #     print(f"[ERROR] idx={idx}, video={self.data[idx]['video_id']}, error: {e}")
-            #     idx += 1
+            try:
+                return self.getitem(idx)
+            except Exception as e:
+                video_id = self.data[idx]['video_id'] if 'video_id' in self.data[idx] else self.data[idx]['video']
+                print(f"[ERROR] idx={idx}, video={video_id}, error: {e}")
+                idx += 1
         raise RuntimeError("All samples from current idx onward failed.")
+
+    def getitem(self, idx):
+        sample = self.data[idx]
+        if not 'question' in sample:
+            sample['question'] = sample['text']
+        if not 'answer' in sample:
+            sample['answer'] = str(sample['solution'])
+        
+        if 'video' in sample or 'video_id' in sample:
+            video_name = sample['video_id'] if 'video_id' in sample else sample['video']
+            video_path, fps = None, 2.0
+            video_frame_path = os.path.join(self.video_dir, video_name.split('.')[0])
+            
+            if not os.path.exists(video_frame_path):
+                video_frame_path = os.path.join(self.video_dir, extract_youtube_id(video_name.split(".")[0]))
+                
+            if os.path.exists(video_frame_path):
+                frame_paths = os.listdir(video_frame_path)
+                frame_paths = sorted(frame_paths, key=lambda x: int(x.split("_")[-1].split(".")[0]))
+                frame_paths = [os.path.join(video_frame_path, frame_path) for frame_path in frame_paths]
+                total_frames = len(frame_paths)
+                if args.max_frames is not None and total_frames > args.max_frames:
+                    idxes = torch.linspace(0, total_frames - 1, args.max_frames).round().long().tolist()
+                    if 'videommmu' in self.video_dir:
+                        idxes.append(total_frames - 1)
+                    frame_paths = [frame_paths[i] for i in idxes]
+                    # fps = args.max_frames / max(total_frames, 1e-6) * fps
+                video_path = frame_paths
+                fps = len(frame_paths) / sample['duration']
+            else:
+                for ext in ['.mp4', '.webm', '.mkv', '.avi']:
+                    path = os.path.join(self.video_dir, video_name.split('.')[0] + ext)
+                    if os.path.exists(path):
+                        video_path = path
+                        break
+            if video_path is None:
+                raise FileNotFoundError(f"Video file for {video_name} not found.")
+            question = self.template.format(input_text=sample['question'], duration=sample['duration'])
+            content_mm = self.content_video.copy()
+            content_mm['video'] = video_path
+            content_mm['fps'] = fps
+            content_mm['draw_number'] = True
+            content_mm['parallel'] = True
+
+        elif 'image' in sample:
+            img_template = self.template.replace("This is a video with duration {duration} seconds.", "This is an image.")
+            question = img_template.format(input_text=sample['question'])
+            image_path = os.path.join(self.video_dir, sample['image'])
+            content_mm = self.content_image.copy()
+            content_mm['image'] = image_path
+        else:
+            raise ValueError(f"Not a multimodal sample! Neither 'video' nor 'image' key found in sample: {sample}")
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    content_mm,
+                    {"type": "text", "text": question},
+                ],
+            }
+        ]
+        text = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        if args.no_cache:
+            image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True)
+        else:
+            image_inputs, video_inputs, video_kwargs = cached_process_vision_info(messages, return_video_kwargs=True)
+
+        mm_data = {}
+        if image_inputs is not None:
+            mm_data["image"] = image_inputs
+        if video_inputs is not None:
+            mm_data["video"] = video_inputs
+        llm_inputs = {
+            "prompt": text,
+            "multi_modal_data": mm_data,
+            "mm_processor_kwargs": video_kwargs,
+        }
+        sample['llm_inputs'] = llm_inputs
+
+        inputs = self.processor(
+            text=[text],
+            images=image_inputs,
+            videos=video_inputs,
+            fps=video_kwargs["fps"],
+            padding=True,
+            padding_side='left',
+            return_tensors="pt",
+        )
+        if video_inputs is not None:
+            ranki_print(f'In dataset, {inputs.input_ids.shape=}, {inputs.video_grid_thw=}')
+        # 返回你需要的内容
+        return sample
 
 
 def set_seed(seed):
@@ -225,7 +235,7 @@ def run_inference(args):
         args: Command-line arguments.
     """
     use_flash_attn = True
-    qwen_path = 'models/Qwen2.5-VL-7B-Instruct'
+    qwen_path = '/data/user_data/jamesdin/models/Qwen2.5-VL-3B-Instruct'
     try:
         if args.backend == 'vllm':
             llm = vllm.LLM(
@@ -436,6 +446,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-cache", action="store_true", default=False)
     parser.add_argument("--backend", type=str, default="vllm", choices=["vllm", "transformers"])
     parser.add_argument("--repeat_times", type=int, default=1)
+    parser.add_argument("--prompt-template", type=str, default=None, help="Prompt template string. If not provided, uses default TEMPLATE.")
     
     global args
     args = parser.parse_args()
