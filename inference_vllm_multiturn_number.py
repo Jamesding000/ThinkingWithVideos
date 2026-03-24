@@ -10,12 +10,15 @@ import argparse
 import numpy as np
 from tqdm import tqdm
 from decord import VideoReader, cpu
+from download_and_extract_frames import extract_youtube_id
 
 # from qwen_vl_utils import process_vision_info
 from verl.utils.dataset.video_vl_utils import process_vision_info, cached_process_vision_info
+from verl.utils.dataset.vision_utils import process_video
 
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoProcessor, GenerationConfig, AutoConfig, AutoModelForVision2Seq
 from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLConfig
+from transformers import Qwen3VLForConditionalGeneration, Qwen3VLConfig
 from peft import AutoPeftModelForCausalLM
 from collections import defaultdict
 
@@ -120,6 +123,11 @@ class VideoQADataset(Dataset):
         self.content_image = content_image
         self.video_dir = args.video_dir
         self.processor = processor
+        
+        # Detect model type
+        self.is_qwen2_5 = 'Qwen2_5' in processor.__class__.__name__
+        self.is_qwen3 = 'Qwen3' in processor.__class__.__name__
+
         tool_config_path = "verl/verl/tools/config/zoom_tool_config_new.yaml"
         tool_list = initialize_tools_from_config(tool_config_path)
         tool_schemas = [tool.tool_schema.model_dump(exclude_unset=True, exclude_none=True) for tool in tool_list]
@@ -133,84 +141,132 @@ class VideoQADataset(Dataset):
 
     def __getitem__(self, idx):
         while idx < len(self.data):
-            # try:
-                sample = self.data[idx]
-                if not 'question' in sample:
-                    sample['question'] = sample['text']
-                if not 'answer' in sample:
-                    sample['answer'] = str(sample['solution'])
-                
-                if 'video' in sample or 'video_id' in sample:
-                    video_name = sample['video_id'] if 'video_id' in sample else sample['video']
-                    video_path, fps = None, 2.0
-                    video_frame_path = os.path.join(self.video_dir, video_name.split('.')[0])
-                    sample['video_path'] = os.path.join(self.video_dir, video_name)  # for tool call
-                    if os.path.exists(video_frame_path):
-                        frame_paths = os.listdir(video_frame_path)
-                        frame_paths = sorted(frame_paths, key=lambda x: int(x.split("_")[-1].split(".")[0]))
-                        frame_paths = [os.path.join(video_frame_path, frame_path) for frame_path in frame_paths]
-                        total_frames = len(frame_paths)
-                        if 'videommmu' in self.video_dir:
-                            frame_paths.append(frame_paths[-1])
-                        video_path = frame_paths
-                        fps = len(frame_paths) / sample['duration']
-                    else:
-                        for ext in ['.mp4', '.webm', '.mkv', '.avi']:
-                            path = os.path.join(self.video_dir, video_name.split('.')[0] + ext)
-                            if os.path.exists(path):
-                                video_path = path
-                                break
-                    if video_path is None:
-                        raise FileNotFoundError(f"Video file for {video_name} not found.")
-                    question = TEMPLATE.format(input_text=sample['question'], duration=sample['duration'])
-                    content_mm = self.content_video.copy()
-                    content_mm['video'] = video_path
-                    content_mm['fps'] = fps
-                    content_mm['draw_number'] = not self.no_number
-                    content_mm['parallel'] = True
-                elif 'image' in sample:
-                    img_template = TEMPLATE.replace("This is a video with duration {duration} seconds.", "This is an image.")
-                    question = img_template.format(input_text=sample['question'])
-                    image_path = os.path.join(self.video_dir, sample['image'])
-                    content_mm = self.content_image.copy()
-                    content_mm['image'] = image_path
-                else:
-                    raise ValueError(f"Not a multimodal sample! Neither 'video' nor 'image' key found in sample: {sample}")
-                messages = [
-                    {
-                        "role": "system",
-                        "content": self.system_prompt,
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            content_mm,
-                            {"type": "text", "text": question},
-                        ],
-                    }
-                ]
-                if args.no_cache:
-                    image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True)
-                else:
-                    image_inputs, video_inputs, video_kwargs = cached_process_vision_info(messages, return_video_kwargs=True)
-                mm_data = {}
-                if image_inputs is not None:
-                    mm_data["image"] = image_inputs
-                if video_inputs is not None:
-                    mm_data["video"] = video_inputs
-                vllm_inputs = {
-                    "messages": messages,
-                    "multi_modal_data": mm_data,
-                    "mm_processor_kwargs": {'fps': 2.0},  # set fps to 2.0
-                }
-                sample['vllm_inputs'] = vllm_inputs
-                # ranki_print(f'In dataset, sample id: {sample["id"]}, video len = {len(video_inputs[0])} shape = {video_inputs[0][0].size} fps = {video_kwargs}')
-                return sample
-            
-            # except Exception as e:
-            #     print(f"[ERROR] idx={idx}, video={self.data[idx]['video_id']}, error: {e}")
-            #     idx += 1
+            try:
+                return self.getitem(idx)
+            except Exception as e:
+                video_id = self.data[idx]['video_id'] if 'video_id' in self.data[idx] else self.data[idx]['video']
+                print(f"[ERROR] idx={idx}, video={video_id}, error: {e}")
+                idx += 1
         raise RuntimeError("All samples from current idx onward failed.")
+    
+    def getitem(self, idx):
+        sample = self.data[idx]
+        if not 'question' in sample:
+            sample['question'] = sample['text']
+        if not 'answer' in sample:
+            sample['answer'] = str(sample['solution'])
+        
+        if 'video' in sample or 'video_id' in sample:
+            video_name = sample['video_id'] if 'video_id' in sample else sample['video']
+            video_path, fps = None, 2.0
+            
+            # Try pre-extracted frames first
+            video_frame_path = os.path.join(self.video_dir, video_name.split('.')[0])
+            sample['video_path'] = os.path.join(self.video_dir, video_name)  # for tool call
+            
+            if not os.path.exists(video_frame_path):
+                video_frame_path = os.path.join(self.video_dir, extract_youtube_id(video_name.split(".")[0]))
+            
+            if os.path.exists(video_frame_path):
+                frame_paths = os.listdir(video_frame_path)
+                frame_paths = sorted(frame_paths, key=lambda x: int(x.split("_")[-1].split(".")[0]))
+                frame_paths = [os.path.join(video_frame_path, frame_path) for frame_path in frame_paths]
+                total_frames = len(frame_paths)
+                if 'videommmu' in self.video_dir:
+                    frame_paths.append(frame_paths[-1])
+                video_path = frame_paths
+                fps = len(frame_paths) / float(sample['duration'])
+            else:
+                # Fallback to raw video file if no frame dir exists
+                for ext in ['.mp4', '.webm', '.mkv', '.avi']:
+                    path = os.path.join(self.video_dir, video_name.split('.')[0] + ext)
+                    if os.path.exists(path):
+                        video_path = path
+                        break
+            if video_path is None:
+                raise FileNotFoundError(f"Video file for {video_name} not found.")
+            question = TEMPLATE.format(input_text=sample['question'], duration=sample['duration'])
+            content_mm = self.content_video.copy()
+            content_mm['video'] = video_path
+            content_mm['fps'] = fps
+            content_mm['draw_number'] = not self.no_number
+            content_mm['parallel'] = True
+        elif 'image' in sample:
+            img_template = TEMPLATE.replace("This is a video with duration {duration} seconds.", "This is an image.")
+            question = img_template.format(input_text=sample['question'])
+            image_path = os.path.join(self.video_dir, sample['image'])
+            content_mm = self.content_image.copy()
+            content_mm['image'] = image_path
+        else:
+            raise ValueError(f"Not a multimodal sample! Neither 'video' nor 'image' key found in sample: {sample}")
+        
+        # Build multi-turn messages
+        messages = [
+            {
+                "role": "system",
+                "content": self.system_prompt,
+            },
+            {
+                "role": "user",
+                "content": [
+                    content_mm,
+                    {"type": "text", "text": question},
+                ],
+            }
+        ]
+        
+        # Build mm_data & mm_processor_kwargs
+        mm_data = {}
+        mm_processor_kwargs = {}
+        
+        if self.is_qwen2_5:
+            # Qwen2.5: Use process_vision_info
+            if args.no_cache:
+                image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True)
+            else:
+                image_inputs, video_inputs, video_kwargs = cached_process_vision_info(messages, return_video_kwargs=True)
+            
+            if image_inputs is not None:
+                mm_data["image"] = image_inputs
+            if video_inputs is not None:
+                mm_data["video"] = video_inputs
+            mm_processor_kwargs = {'fps': 2.0}  # set fps to 2.0
+        
+        elif self.is_qwen3:
+            # Qwen3: Load frames manually with process_video
+            if content_mm.get("type") == "image":
+                mm_data["image"] = [content_mm["image"]]
+                mm_processor_kwargs["fps"] = []
+            
+            if content_mm.get("type") == "video":
+                video_spec = content_mm.copy()
+                frames, fps_eff = process_video(video_spec)
+                
+                n_frames = len(frames)
+                if n_frames == 0:
+                    raise RuntimeError(f"No frames loaded for {video_name}")
+                
+                # Create metadata structure for Qwen3
+                metadata = {
+                    "total_num_frames": n_frames,
+                    "fps": float(fps_eff),
+                    "duration": float(n_frames) / float(fps_eff) if fps_eff > 0 else float(sample.get("duration", n_frames / 2.0)),
+                    "frames_indices": np.arange(n_frames),
+                    "do_sample_frames": False,
+                }
+                
+                # NOTE: each video item is a TUPLE (frames, metadata_dict)
+                mm_data["video"] = [(frames, metadata)]
+                mm_processor_kwargs["fps"] = [float(fps_eff)]
+        
+        vllm_inputs = {
+            "messages": messages,
+            "multi_modal_data": mm_data,
+            "mm_processor_kwargs": mm_processor_kwargs,
+        }
+        sample['vllm_inputs'] = vllm_inputs
+        # ranki_print(f'In dataset, sample id: {sample["id"]}, video len = {len(video_inputs[0])} shape = {video_inputs[0][0].size} fps = {video_kwargs}')
+        return sample
 
 def execute_tools(tools, tool_call_arguments, tools_kwargs):
     tool_name = tool_call_arguments["name"]
@@ -263,7 +319,13 @@ def run_inference(args):
         args: Command-line arguments.
     """
     use_flash_attn = True
-    qwen_path = 'models/Qwen2.5-VL-7B-Instruct'
+    
+    # Auto-detect model type from model_path
+    if 'Qwen3' in args.model_path or 'qwen3' in args.model_path.lower():
+        qwen_path = "/data/user_data/jamesdin/models/Qwen3-VL-2B-Thinking"
+    else:
+        qwen_path = '/data/user_data/jamesdin/models/Qwen2.5-VL-3B-Instruct'
+    
     assert args.backend == 'vllm'
     llm = vllm.LLM(
         model=args.model_path,
@@ -272,11 +334,18 @@ def run_inference(args):
         max_num_batched_tokens=8192,
         # disable_chunked_mm_input=True,
         # limit_mm_per_prompt={'image': 0, 'video': 2},
+        max_model_len=65536,
         gpu_memory_utilization=0.7,
         enforce_eager=True,
     )
     processor = AutoProcessor.from_pretrained(qwen_path, trust_remote_code=True, use_fast=True)
     ranki_print("Load model and processor success!")
+    
+    # Detect processor type
+    is_qwen2_5 = 'Qwen2_5' in processor.__class__.__name__
+    is_qwen3 = 'Qwen3' in processor.__class__.__name__
+    if not is_qwen2_5 and not is_qwen3:
+        raise ValueError(f"Unsupported model architecture: {processor.__class__.__name__}")
 
     # Create the output directory if it doesn't exist
     if not os.path.exists(args.output_dir):
@@ -330,6 +399,21 @@ def run_inference(args):
 
         max_turns = 2
         vllm_inputs = [sample['vllm_inputs'] for sample in samples]
+        
+        # Normalize video structure for Qwen3: [frames, metadata] -> (frames, metadata)
+        if is_qwen3:
+            for req in vllm_inputs:
+                mm_data = req.get("multi_modal_data", {})
+                if "video" in mm_data and mm_data["video"] is not None:
+                    fixed_videos = []
+                    for v in mm_data["video"]:
+                        if isinstance(v, list) and len(v) == 2:
+                            fixed_videos.append((v[0], v[1]))
+                        else:
+                            fixed_videos.append(v)
+                    mm_data["video"] = fixed_videos
+                    req["multi_modal_data"] = mm_data
+        
         for step in range(max_turns + 1):
             ranki_print(f'>>> [step {step} / {max_turns + 1}]')
             active_id_list = torch.where(active_mask)[0].tolist()
@@ -408,14 +492,35 @@ def run_inference(args):
                                 tool_result["ele"],
                                 {
                                     "type": "text",
-                                    "text": teaser
+                                    "text": teaser,
                                 }
                             ]
                             new_prompt_str = "<|vision_start|><|video_pad|><|vision_end|>" + teaser
-                            new_videos = [tool_result["video"]]
-                            new_fps = [tool_result["fps"]]  # Here is a bug of VLLM V1 Engine
-                            vllm_inputs[idx]["multi_modal_data"]["video"].extend(new_videos)
-                            # vllm_inputs[idx]["mm_processor_kwargs"]["fps"].extend(new_fps)
+                            
+                            if is_qwen2_5:
+                                # Qwen2.5: plain frames list
+                                new_videos = [tool_result["video"]]
+                                new_fps = [tool_result["fps"]]
+                                vllm_inputs[idx]["multi_modal_data"]["video"].extend(new_videos)
+                            elif is_qwen3:
+                                # Qwen3: (frames, metadata) tuple for vLLM, plain frames for HF processor
+                                frames = tool_result["video"]
+                                fps_val = float(tool_result["fps"])
+                                n_frames = len(frames)
+                                metadata = {
+                                    "total_num_frames": n_frames,
+                                    "fps": float(fps_val),
+                                    "duration": float(n_frames) / float(fps_val) if fps_val > 0 else float(samples[idx].get("duration", n_frames / 2.0)),
+                                    "frames_indices": np.arange(n_frames),
+                                    "do_sample_frames": False,
+                                }
+                                vllm_video_item = (frames, metadata)
+                                vllm_inputs[idx]["multi_modal_data"]["video"].append(vllm_video_item)
+                                
+                                # HF processor side: plain frames + scalar fps
+                                new_videos = [frames]
+                                new_fps = fps_val  # scalar, NOT [fps]
+                        
                         new_message = {
                             "role": "tool",
                             "content": new_content,

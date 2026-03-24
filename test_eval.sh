@@ -24,7 +24,7 @@ export exp_suffix=thinking_lr1e_5
 
 # auto config
 export EXP_NAME=qwen2_5_vl_7b_${exp_suffix}_${n_gpus_per_node}g_sft_${dataset}_bs${batch_size}
-export SAVE_PATH=outputs/${project_name}/${EXP_NAME}
+export SAVE_PATH=/data/user_data/jamesdin/outputs/${project_name}/${EXP_NAME}
 
 export WANDB_API_KEY=YOUR_WANDB_API_KEY
 export WANDB_MODE=offline  # TODO: setitng to online cause failed to login issue

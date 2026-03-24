@@ -7,7 +7,7 @@ conda activate verl
 # 1. install vllm and torch
 pip install "vllm==0.8.5.post1" "torch==2.6.0" "torchvision==0.21.0" "torchaudio==2.6.0" "tensordict==0.6.2" torchdata
 # 2. install transformers
-pip install "transformers[hf_xet]==4.51.1" accelerate datasets peft hf-transfer "numpy<2.0.0" "pyarrow>=15.0.0" pandas \
+pip install "transformers[hf_xet]==4.51.1" accelerate datasets "peft==0.17.1" hf-transfer "numpy<2.0.0" "pyarrow>=15.0.0" pandas \
     ray[default] codetiming hydra-core pylatexenc qwen-vl-utils wandb dill pybind11 liger-kernel mathruler \
     pytest py-spy  pre-commit ruff 
 # 3. install other dependencies
@@ -18,8 +18,14 @@ python -c "from opencv_fixer import AutoFix; AutoFix()"
 # 5. install decord rouge_score matplotlib
 pip install decord rouge_score matplotlib
 
+# 6. other dependencies
+conda install -y pytorch==2.3.0 torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+pip install flash_attn --no-build-isolation
+pip install huggingface-hub[cli] tensordict pandas ray hydra-core peft datasets
+
 cd verl
 pip install --no-cache-dir --no-deps -e .
+pip install -r requirements.txt
 
 echo "Successfully installed all packages"
 

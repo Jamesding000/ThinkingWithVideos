@@ -140,6 +140,12 @@ models/
 
 *.log
 secret.json
+<<<<<<< Updated upstream
 cookies.txt
 
 !verl/**
+=======
+
+# for downloading youtube videos
+cookies.txt
+>>>>>>> Stashed changes

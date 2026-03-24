@@ -25,12 +25,31 @@ import logging
 import math
 import ast
 
+# TG_TEMPLATE = """You are given a question about a video.
+# Your task is to locate ONE continuous time span (in seconds) in the video
+# that best supports answering the question.
+
+# Return ONLY the start time and end time in seconds, wrapped in <answer> and </answer> tags,
+# in this exact format:
+# <answer>start_time - end_time</answer>
+
+# For example:
+# The question is: "When does the person turn the light on?"
+# You should answer with something like:
+# <answer>24.30 - 30.42</answer>
+
+# Now here is the question:
+# {input_text}
+# Remember: output ONLY one time range, in this exact format:
+# <answer>start_time - end_time</answer>"""
+
 
 def get_dataset_info(dataset):
     dataset_list = [
-        {'dataset_name': 'next_gqa', 'frame_dir': 'data/nextgqa/video_14400frames_fps2', 'data_file': 'data/nextgqa/test_set_grpo_src.json'},  # gqa task
-        {'dataset_name': 'rextime', 'frame_dir': 'data/rextime/video_14400frames_fps2', 'data_file': 'data/rextime/test_set_grpo_exist_src.json'},  # gqa task
-        {'dataset_name': 'rextime_val', 'frame_dir': 'data/rextime/video_14400frames_fps2', 'data_file': 'data/rextime/val_set_grpo_exist_src.json'},  # gqa task
+        # {'dataset_name': 'next_gqa', 'frame_dir': 'data/nextgqa/raw_videos ', 'data_file': 'data/nextgqa/test_set_grpo_src.json'},  # gqa task
+        # {'dataset_name': 'rextime', 'frame_dir': 'data/rextime/video_14400frames_fps2', 'data_file': 'data/rextime/test_set_grpo_exist_src.json'},  # gqa task
+        {'dataset_name': 'rextime_val', 'frame_dir': '/data/user_data/jamesdin/data/rextime/video_14400frames_fps2', 'data_file': '/data/user_data/jamesdin/data/rextime/rextime_validation.json'},  # gqa task
+        {'dataset_name': 'rextime_test', 'frame_dir': '/data/user_data/jamesdin/data/rextime/video_14400frames_fps2', 'data_file': '/data/user_data/jamesdin/data/rextime/rextime_test.json'},  # gqa task
     ]
     for d in dataset_list:
         if d['dataset_name'] == dataset:
@@ -80,6 +99,8 @@ def launch_multi_gpu_eval(args, dataset_name, frame_dir, data_file, evaluation_n
                 cmd += ["--lora-path", args.lora_path]
             if args.no_cache:
                 cmd += ["--no-cache"]
+            if args.prompt_template:
+                cmd += ["--prompt-template", args.prompt_template]
             logging.debug(f"Starting subprocess with command: {' '.join(cmd)}")
             # Start subprocess and capture output
             my_env = os.environ.copy()
@@ -186,6 +207,9 @@ def cal_mcq_reward(predict_str: str, ground_truth: str, extra_info: dict=None) -
 def cal_iou_reward(predict_str: str, ground_truth: str, extra_info: dict=None):
     gt_list = extract_time_range(ground_truth)
     pred_list = extract_time_range(predict_str)
+    print('predict_str', predict_str)
+    print('gt_list', gt_list)
+    print('pred_list', pred_list)
     iou, precision, recall = cal_iou_precision_recall(gt_list, pred_list)
     iou = max(0, iou)  # neglect special cases
     log_data = {
@@ -336,6 +360,8 @@ if __name__ == "__main__":
         exit(0)
     print(f'[main] Execute {args.dataset} evaluation')
     out_dir, gt_file = launch_multi_gpu_eval(args, **info, evaluation_name=args.evaluation_name)
+    # out_dir = "/data/user_data/jamesdin/outputs//global_step_100/evaluation_maxpix384*384_number/rextime_val"
+    # gt_file = "/data/user_data/jamesdin/data/rextime/rextime_validation.json"
     print(f'[main] Execute {args.dataset} evaluation')
     calc_eval_result(out_dir, gt_file, args.num_chunks, info['data_file'])
 
