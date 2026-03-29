@@ -60,7 +60,8 @@ pip install \
   py-spy \
   pre-commit \
   ruff \
-  "huggingface-hub[cli]"
+  "huggingface-hub[cli]" \
+  "tensordict-nightly"
 
 # === 4. Other infra deps ===
 pip install \
